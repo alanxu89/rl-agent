@@ -5,6 +5,8 @@ import math
 
 import numpy as np
 
+from utils import build_polygon, is_point_inside_polygon
+
 
 class AbstractEnv(ABC):
 
@@ -42,28 +44,58 @@ class SimulationEnv(AbstractEnv):
         self.n_files = len(self.data_files)
         self.cur_data_file = None
         self.scenario = {}
+
         self.frame_idx = 0
         self.obs_len = 10
+
+        self.default_speed_limit = 40.0 / 3.6
+
         self.agent_state = None
+        self.social_state = None
+        # lane speed limit info, etc
+        self.map_state = {}
+        # light state for agent's current lane, with state and stop_point
+        self.light_state = {"state": "GO", "stop_point": np.zeros(2)}
+
         self.agent_states = []
+
         self.l_r = 1.0
         self.l_f = 1.85
         self.dt = 0.1
+        self.reward_coeff = {
+            'dst_reward': 1.0,
+            'speed_reward': 0.1,
+            'collision_penalty': -1.0,
+            'off_lane_penalty': -1.0,
+            'violate_traffic_light_penalty': -1.0
+        }
 
     def reset(self):
         self.frame_idx = 0
         self.cur_data_file = self.data_files[random.randint(
             0, self.n_files - 1)]
+
         self.scenario['agent_features'] = np.random.normal([100, 5])
-        self.agent_state = self.scenario['agent_features'][0]
+        self.agent_state = self.scenario['agent_features'][self.frame_idx]
         self.agent_states.append(self.agent_state)
         self.scenario['agent_dst'] = self.scenario['agent_features'][-1, :2]
+
         self.scenario['social_features'] = np.random.normal([32, 100, 5])
+        self.social_state = self.scenario['social_features'][:, self.frame_idx]
+
         self.scenario['map_features'] = np.random.normal([64, 256, 2])
+
         self.scenario['light_features'] = np.random.normal([4, 3])
 
     def step(self, action):
+        self.frame_idx += 1
+
+        # update agent
         self.__apply_vehicle_dynamics(action)
+
+        # update social agents
+        self.social_state = self.scenario['social_features'][:, self.frame_idx]
+
         self.agent_states.append(self.agent_state)
 
         new_observation = {}
@@ -75,7 +107,6 @@ class SimulationEnv(AbstractEnv):
 
         reward = self.__get_reward()
 
-        self.frame_idx += 1
         done = (self.frame_idx > 100)
 
         return new_observation, reward, done
@@ -87,8 +118,10 @@ class SimulationEnv(AbstractEnv):
             action: [u1, u2]
             where u1 is acceleration and u2 is the front wheel steering
         """
-        # get current state
-        x, y, v, theta = self.agent_state[:4]
+        # get current state: [x, y, z, l, w, h, heading, vx, vy, valid]
+        x, y = self.agent_state[:2]
+        theta, vx, vy = self.agent_state[6:9]
+        v = math.sqrt(vx * vx + vy * vy)
 
         # extract acceleration and front wheel steering from action input
         u1, u2 = action
@@ -100,16 +133,41 @@ class SimulationEnv(AbstractEnv):
         y += v * math.sin(theta + beta)
         theta += v / self.l_r * math.sin(beta)
         v += u1 * self.dt
+        vx = v * math.cos(theta)
+        vy = v * math.sin(theta)
 
-        self.agent_state[:4] = np.array([x, y, v, theta])
+        self.agent_state[:2] = np.array([x, y])
+        self.agent_state[6:9] = np.array([theta, vx, vy])
 
     def __get_reward(self):
-        return self.__get_dst_reward() + self.__get_collision_penalty(
-        ) + self.__get_off_lane_penalty() + self.__get_speed_limit_penalty(
-        ) + self.__get_obey_traffic_light_penalty()
+        reward = 0.0
+        for reward_term_name, reward_term_coeff in self.reward_coeff.items():
+            reward_func_name = "__get_" + reward_term_name
+            reward_func = getattr(self, reward_func_name)
+            reward += reward_term_coeff * reward_func()
+
+        return reward
 
     def __get_dst_reward(self):
-        return 0
+        agent_polygon = build_polygon(self.agent_state[0], self.agent_state[1],
+                                      self.agent_state[3], self.agent_state[4],
+                                      self.agent_state[6])
+
+        return is_point_inside_polygon(self.scenario['agent_dst'],
+                                       agent_polygon)
+
+    def __get_speed_reward(self):
+        current_speed_limit = self.map_state.get('speed_limit',
+                                                 self.default_speed_limit)
+        vx, vy = self.agent_state[7:9]
+        v = math.sqrt(vx * vx + vy * vy)
+
+        v_normalized = v / current_speed_limit
+
+        if v_normalized < 1.0:
+            return v_normalized
+        else:
+            return 1.0 - 5.0 * v_normalized
 
     def __get_collision_penalty(self):
         return 0
@@ -117,8 +175,19 @@ class SimulationEnv(AbstractEnv):
     def __get_off_lane_penalty(self):
         return 0
 
-    def __get_speed_limit_penalty(self):
-        return 0
+    def __get_violate_traffic_light_penalty(self):
+        if self.light_state['state'] == "STOP":
+            stop_point = self.light_state['stop_point']
+            x, y = self.agent_state[:2]
+            theta, vx, vy = self.agent_state[6:9]
+            v = math.sqrt(vx * vx + vy * vy)
+            agent_to_stop_point = np.array(
+                [stop_point[1] - y, stop_point[0] - x])
+            vec_projection = agent_to_stop_point * np.array(
+                [math.cos(theta), math.sin(theta)])
 
-    def __get_obey_traffic_light_penalty(self):
+            if vec_projection < 0:
+                # agent is not behind stop point
+                return min(abs(vec_projection), 20) * 0.05
+
         return 0
