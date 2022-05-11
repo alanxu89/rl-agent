@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List
 import random
+import math
 
 import numpy as np
 
@@ -17,13 +18,6 @@ class AbstractEnv(ABC):
 
     @abstractmethod
     def step(self, action):
-        """
-        Args:
-            action : action of the action_space to take.
-
-        Returns:
-            The new observation, the reward and a boolean if the game has ended.
-        """
         pass
 
     @abstractmethod
@@ -52,6 +46,9 @@ class SimulationEnv(AbstractEnv):
         self.obs_len = 10
         self.agent_state = None
         self.agent_states = []
+        self.l_r = 1.0
+        self.l_f = 1.85
+        self.dt = 0.1
 
     def reset(self):
         self.frame_idx = 0
@@ -66,7 +63,6 @@ class SimulationEnv(AbstractEnv):
         self.scenario['light_features'] = np.random.normal([4, 3])
 
     def step(self, action):
-        # self.agent_state[:2] += 0.1 * action
         self.__apply_vehicle_dynamics(action)
         self.agent_states.append(self.agent_state)
 
@@ -85,7 +81,27 @@ class SimulationEnv(AbstractEnv):
         return new_observation, reward, done
 
     def __apply_vehicle_dynamics(self, action):
-        self.agent_state[:2] += 0.1 * action
+        """ kinematic bicycle model 
+
+        Args:
+            action: [u1, u2]
+            where u1 is acceleration and u2 is the front wheel steering
+        """
+        # get current state
+        x, y, v, theta = self.agent_state[:4]
+
+        # extract acceleration and front wheel steering from action input
+        u1, u2 = action
+
+        # the slip angle at the center of gravity
+        beta = math.atan(math.tan(u2) * self.l_r / (self.l_f + self.l_r))
+
+        x += v * math.cos(theta + beta)
+        y += v * math.sin(theta + beta)
+        theta += v / self.l_r * math.sin(beta)
+        v += u1 * self.dt
+
+        self.agent_state[:4] = np.array([x, y, v, theta])
 
     def __get_reward(self):
         return self.__get_dst_reward() + self.__get_collision_penalty(
