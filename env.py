@@ -4,8 +4,9 @@ import random
 import math
 
 import numpy as np
+from shapely.geometry import Point, LineString, Polygon
 
-from utils import build_polygon, is_point_inside_polygon
+from utils import build_polygon, batch_build_polygon, is_point_inside_polygon
 
 
 class AbstractEnv(ABC):
@@ -59,11 +60,15 @@ class AgentState:
         self.vy = vy
         self.valid = valid
 
+        self.lon_polygon_buffer = 0.6
+        self.lat_polygon_buffer = 0.2
+
     def speed(self):
         return math.sqrt(self.vx**2 + self.vy**2)
 
     def polygon(self):
-        return build_polygon(self.x, self.y, self.l, self.w, self.heading)
+        return build_polygon(self.x, self.y, self.l + self.lon_polygon_buffer,
+                             self.w + self.lat_polygon_buffer, self.heading)
 
     def to_array(self):
         return np.array([
@@ -112,7 +117,7 @@ class SimulationEnv(AbstractEnv):
         self.cur_data_file = self.data_files[random.randint(
             0, self.n_files - 1)]
 
-        self.scenario['agent_features'] = np.random.normal([100, 5])
+        self.scenario['agent_features'] = np.random.normal([100, 10])
         agent_init_state = self.scenario['agent_features'][self.frame_idx]
         self.agent_state = AgentState(agent_init_state[0], agent_init_state[1],
                                       agent_init_state[2], agent_init_state[3],
@@ -122,7 +127,7 @@ class SimulationEnv(AbstractEnv):
         self.agent_states.append(self.agent_state)
         self.scenario['agent_dst'] = self.scenario['agent_features'][-1, :2]
 
-        self.scenario['social_features'] = np.random.normal([32, 100, 5])
+        self.scenario['social_features'] = np.random.normal([32, 100, 10])
         self.social_state = self.scenario['social_features'][:, self.frame_idx]
 
         self.scenario['map_features'] = np.random.normal([64, 256, 2])
@@ -214,10 +219,42 @@ class SimulationEnv(AbstractEnv):
             return 1.0 - 5.0 * v_normalized
 
     def __get_collision_penalty(self):
+        social_state_arr = self.social_state[:, [0, 1, 3, 4, 6]]
+        social_polygons = batch_build_polygon(social_state_arr)
+
+        agent_polygon = Polygon(self.agent_state.polygon())
+        for social_polygon in social_polygons:
+            sp = Polygon(social_polygon)
+            if agent_polygon.intersects(sp):
+                return 1.0
+
         return 0
 
     def __get_off_lane_penalty(self):
-        return 0
+        lane_center = self.map_state.get('lane', None)
+        road_lines = self.map_state.get('road_line', [])
+        road_edges = self.map_state.get('road_edge', [])
+
+        agent_pos = Point(self.agent_state.x, self.agent_state.y)
+        agent_polygon = Polygon(self.agent_state.polygon())
+
+        penalty = 0
+        if lane_center is not None:
+            center_line = LineString(lane_center)
+            distance_to_centerline = agent_pos.distance(center_line)
+            penalty += 0.01 * distance_to_centerline**2
+
+        for road_line in road_lines:
+            road_separate_line = LineString(road_line)
+            if agent_polygon.intersects(road_separate_line):
+                penalty += 0.1
+
+        for road_edge in road_lines:
+            edge_line = LineString(road_edge)
+            if agent_polygon.intersects(road_edge):
+                penalty += 0.5
+
+        return penalty
 
     def __get_violate_traffic_light_penalty(self):
         if self.light_state['state'] == "STOP":
