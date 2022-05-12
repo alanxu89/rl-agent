@@ -146,7 +146,7 @@ class SimulationEnv(AbstractEnv):
         self.frame_idx += 1
 
         # update agent
-        self.__apply_vehicle_dynamics(action)
+        self.agent_state = self.__apply_vehicle_dynamics(action)
 
         # update social agents
         self.social_state = self.scenario['social_features'][:, self.frame_idx]
@@ -166,6 +166,12 @@ class SimulationEnv(AbstractEnv):
         done = (self.frame_idx >= self.max_frames - 1)
 
         return new_observation, reward, done
+
+    def random_action(self):
+        acc = np.random.normal(scale=2.0)
+        steer = np.random.normal(scale=0.1)
+
+        return np.array([acc, steer])
 
     def __apply_vehicle_dynamics(self, action):
         """ update agent state with kinematic bicycle model 
@@ -193,10 +199,11 @@ class SimulationEnv(AbstractEnv):
         vy = v * math.sin(theta)
 
         # update agent state
-        self.agent_state = AgentState(x, y, self.agent_state.z,
-                                      self.agent_state.l, self.agent_state.w,
-                                      self.agent_state.h, theta, vx, vy,
-                                      self.agent_state.valid)
+        new_agent_state = AgentState(x, y, self.agent_state.z,
+                                     self.agent_state.l, self.agent_state.w,
+                                     self.agent_state.h, theta, vx, vy,
+                                     self.agent_state.valid)
+        return new_agent_state
 
     def __get_reward(self):
         reward = 0.0
