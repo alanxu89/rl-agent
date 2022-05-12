@@ -6,7 +6,7 @@ import math
 import numpy as np
 from shapely.geometry import Point, LineString, Polygon
 
-from utils import build_polygon, batch_build_polygon, is_point_inside_polygon
+from utils import build_polygon, batch_build_polygon
 
 
 class AbstractEnv(ABC):
@@ -60,15 +60,22 @@ class AgentState:
         self.vy = vy
         self.valid = valid
 
+        self.speed = math.sqrt(self.vx**2 + self.vy**2)
+
         self.lon_polygon_buffer = 0.6
         self.lat_polygon_buffer = 0.2
 
-    def speed(self):
-        return math.sqrt(self.vx**2 + self.vy**2)
+        self.position = self.__build_agent_position()
 
-    def polygon(self):
-        return build_polygon(self.x, self.y, self.l + self.lon_polygon_buffer,
-                             self.w + self.lat_polygon_buffer, self.heading)
+        self.polygon = self.__build_agent_polygon()
+
+    def __build_agent_position(self):
+        return Point(self.agent_state.x, self.agent_state.y)
+
+    def __build_agent_polygon(self):
+        return Polygon(
+            build_polygon(self.x, self.y, self.l + self.lon_polygon_buffer,
+                          self.w + self.lat_polygon_buffer, self.heading))
 
     def to_array(self):
         return np.array([
@@ -88,6 +95,7 @@ class SimulationEnv(AbstractEnv):
         self.scenario = {}
 
         self.frame_idx = 0
+        self.max_frames = 100
         self.obs_len = 10
 
         self.default_speed_limit = 40.0 / 3.6
@@ -147,30 +155,29 @@ class SimulationEnv(AbstractEnv):
 
         new_observation = {}
         new_observation['agent_features'] = np.array(
-            [s.to_array() for s in self.agent_states[-10:]])
+            [s.to_array() for s in self.agent_states[-self.obs_len:]])
         new_observation['social_features'] = self.scenario['social_features'][
-            max(0, self.frame_idx - 10):self.frame_idx]
+            max(0, self.frame_idx - self.obs_len):self.frame_idx]
         new_observation['map_features'] = self.scenario['map_features']
         new_observation['light_features'] = self.scenario['light_features']
 
         reward = self.__get_reward()
 
-        done = (self.frame_idx > 100)
+        done = (self.frame_idx >= self.max_frames - 1)
 
         return new_observation, reward, done
 
     def __apply_vehicle_dynamics(self, action):
-        """ kinematic bicycle model 
+        """ update agent state with kinematic bicycle model 
 
         Args:
             action: [u1, u2]
             where u1 is acceleration and u2 is the front wheel steering
         """
-        # get current state: [x, y, z, l, w, h, heading, vx, vy, valid]
         x = self.agent_state.x
         y = self.agent_state.y
         theta = self.agent_state.heading
-        v = self.agent_state.speed()
+        v = self.agent_state.speed
 
         # extract acceleration and front wheel steering from action input
         u1, u2 = action
@@ -185,11 +192,11 @@ class SimulationEnv(AbstractEnv):
         vx = v * math.cos(theta)
         vy = v * math.sin(theta)
 
-        self.agent_state.x = x
-        self.agent_state.y = y
-        self.agent_state.heading = theta
-        self.agent_state.vx = vx
-        self.agent_state.vy = vy
+        # update agent state
+        self.agent_state = AgentState(x, y, self.agent_state.z,
+                                      self.agent_state.l, self.agent_state.w,
+                                      self.agent_state.h, theta, vx, vy,
+                                      self.agent_state.valid)
 
     def __get_reward(self):
         reward = 0.0
@@ -201,15 +208,15 @@ class SimulationEnv(AbstractEnv):
         return reward
 
     def __get_dst_reward(self):
-        agent_polygon = self.agent_state.polygon()
+        dst = Point(self.scenario['agent_dst'][0],
+                    self.scenario['agent_dst'][1])
 
-        return is_point_inside_polygon(self.scenario['agent_dst'],
-                                       agent_polygon)
+        return self.agent_state.polygon.intersects(dst)
 
     def __get_speed_reward(self):
         current_speed_limit = self.map_state.get('speed_limit',
                                                  self.default_speed_limit)
-        v = self.agent_state.speed()
+        v = self.agent_state.speed
 
         v_normalized = v / current_speed_limit
 
@@ -222,10 +229,9 @@ class SimulationEnv(AbstractEnv):
         social_state_arr = self.social_state[:, [0, 1, 3, 4, 6]]
         social_polygons = batch_build_polygon(social_state_arr)
 
-        agent_polygon = Polygon(self.agent_state.polygon())
         for social_polygon in social_polygons:
             sp = Polygon(social_polygon)
-            if agent_polygon.intersects(sp):
+            if self.agent_state.polygon.intersects(sp):
                 return 1.0
 
         return 0
@@ -235,23 +241,21 @@ class SimulationEnv(AbstractEnv):
         road_lines = self.map_state.get('road_line', [])
         road_edges = self.map_state.get('road_edge', [])
 
-        agent_pos = Point(self.agent_state.x, self.agent_state.y)
-        agent_polygon = Polygon(self.agent_state.polygon())
-
         penalty = 0
         if lane_center is not None:
             center_line = LineString(lane_center)
-            distance_to_centerline = agent_pos.distance(center_line)
+            distance_to_centerline = self.agent_state.position.distance(
+                center_line)
             penalty += 0.01 * distance_to_centerline**2
 
         for road_line in road_lines:
             road_separate_line = LineString(road_line)
-            if agent_polygon.intersects(road_separate_line):
+            if self.agent_state.polygon.intersects(road_separate_line):
                 penalty += 0.1
 
-        for road_edge in road_lines:
+        for road_edge in road_edges:
             edge_line = LineString(road_edge)
-            if agent_polygon.intersects(road_edge):
+            if self.agent_state.polygon.intersects(edge_line):
                 penalty += 0.5
 
         return penalty
@@ -269,7 +273,7 @@ class SimulationEnv(AbstractEnv):
                 math.sin(self.agent_state.heading)
             ])
 
-            v = self.agent_state.speed()
+            v = self.agent_state.speed
 
             if vec_projection < 0:
                 # agent is not behind stop point
