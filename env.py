@@ -230,7 +230,7 @@ class SimulationEnv(AbstractEnv):
         if v_normalized < 1.0:
             return v_normalized
         else:
-            return 1.0 - 5.0 * v_normalized
+            return 1.0 - 10.0 * (v_normalized - 1.0)
 
     def __get_collision_penalty(self):
         social_state_arr = self.social_state[:, [0, 1, 3, 4, 6]]
