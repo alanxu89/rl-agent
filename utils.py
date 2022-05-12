@@ -1,8 +1,6 @@
 import math
 import numpy as np
 
-from shapely.geometry import Point, Polygon
-
 
 def build_polygon(x, y, l, w, heading):
     coords = 0.5 * np.array([[l, w], [-l, w], [-l, -w], [l, -w]])
@@ -48,10 +46,3 @@ def batch_build_polygon(inputs: np.ndarray) -> np.ndarray:
     coords += np.expand_dims(xy, axis=1)
 
     return coords
-
-
-def is_point_inside_polygon(point: np.ndarray, polygon: np.ndarray):
-    p = Point(point[0], point[1])
-    poly = Polygon(polygon)
-
-    return poly.intersects(p)
