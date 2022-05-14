@@ -109,12 +109,18 @@ class SimulationEnv(AbstractEnv):
 
         self.agent_states = []
 
+        self.dst = None
+
+        self.original_distance_to_dst = 0.0
+
+        self.done = False
+
         self.l_r = 1.0
         self.l_f = 1.85
         self.dt = 0.1
         self.reward_coeff = {
             'dst_reward': 1.0,
-            'speed_reward': 0.1,
+            'speed_penalty': -0.1,
             'collision_penalty': -1.0,
             'off_lane_penalty': -1.0,
             'violate_traffic_light_penalty': -1.0
@@ -133,7 +139,12 @@ class SimulationEnv(AbstractEnv):
                                       agent_init_state[6], agent_init_state[7],
                                       agent_init_state[8], agent_init_state[9])
         self.agent_states.append(self.agent_state)
-        self.scenario['agent_dst'] = self.scenario['agent_features'][-1, :2]
+
+        self.dst = Point(self.scenario['agent_features'][-1, 0],
+                         self.scenario['agent_features'][-1, 1])
+
+        self.original_distance_to_dst = self.agent_state.position.distance(
+            self.dst)
 
         self.scenario['social_features'] = np.random.normal([32, 100, 10])
         self.social_state = self.scenario['social_features'][:, self.frame_idx]
@@ -163,9 +174,10 @@ class SimulationEnv(AbstractEnv):
 
         reward = self.__get_reward()
 
-        done = (self.frame_idx >= self.max_frames - 1)
+        self.done = self.__dst_reached() or (self.frame_idx
+                                             == self.max_frames - 1)
 
-        return new_observation, reward, done
+        return new_observation, reward, self.done
 
     def random_action(self):
         acc = np.random.normal(scale=2.0)
@@ -214,23 +226,29 @@ class SimulationEnv(AbstractEnv):
 
         return reward
 
+    def __dst_reached(self):
+        return self.agent_state.polygon.intersects(self.dst)
+
     def __get_dst_reward(self):
-        dst = Point(self.scenario['agent_dst'][0],
-                    self.scenario['agent_dst'][1])
+        if self.__dst_reached():
+            frames_pct_spent = self.frame_idx / (self.max_frames - 1)
+            return 1.0 - 0.5 * frames_pct_spent
 
-        return self.agent_state.polygon.intersects(dst)
+        if self.done:
+            distance_to_dst = self.agent_state.position.distance(self.dst)
+            return 0.5 * (1.0 -
+                          distance_to_dst / self.original_distance_to_dst)
+        else:
+            return 0.0
 
-    def __get_speed_reward(self):
+    def __get_speed_penalty(self):
         current_speed_limit = self.map_state.get('speed_limit',
                                                  self.default_speed_limit)
         v = self.agent_state.speed
 
         v_normalized = v / current_speed_limit
 
-        if v_normalized < 1.0:
-            return v_normalized
-        else:
-            return 1.0 - 10.0 * (v_normalized - 1.0)
+        return max(v_normalized - 1.0, 0.0)
 
     def __get_collision_penalty(self):
         social_state_arr = self.social_state[:, [0, 1, 3, 4, 6]]
