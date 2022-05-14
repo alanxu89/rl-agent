@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List
 import random
 import math
+import time
 
 import numpy as np
 from shapely.geometry import Point, LineString, Polygon
@@ -70,7 +71,7 @@ class AgentState:
         self.polygon = self.__build_agent_polygon()
 
     def __build_agent_position(self):
-        return Point(self.agent_state.x, self.agent_state.y)
+        return Point(self.x, self.y)
 
     def __build_agent_polygon(self):
         return Polygon(
@@ -131,7 +132,7 @@ class SimulationEnv(AbstractEnv):
         self.cur_data_file = self.data_files[random.randint(
             0, self.n_files - 1)]
 
-        self.scenario['agent_features'] = np.random.normal([100, 10])
+        self.scenario['agent_features'] = np.random.normal(size=[100, 10])
         agent_init_state = self.scenario['agent_features'][self.frame_idx]
         self.agent_state = AgentState(agent_init_state[0], agent_init_state[1],
                                       agent_init_state[2], agent_init_state[3],
@@ -146,12 +147,12 @@ class SimulationEnv(AbstractEnv):
         self.original_distance_to_dst = self.agent_state.position.distance(
             self.dst)
 
-        self.scenario['social_features'] = np.random.normal([32, 100, 10])
+        self.scenario['social_features'] = np.random.normal(size=[32, 100, 10])
         self.social_state = self.scenario['social_features'][:, self.frame_idx]
 
-        self.scenario['map_features'] = np.random.normal([64, 256, 2])
+        self.scenario['map_features'] = np.random.normal(size=[64, 256, 2])
 
-        self.scenario['light_features'] = np.random.normal([4, 3])
+        self.scenario['light_features'] = np.random.normal(size=[4, 3])
 
     def step(self, action):
         self.frame_idx += 1
@@ -178,6 +179,12 @@ class SimulationEnv(AbstractEnv):
                                              == self.max_frames - 1)
 
         return new_observation, reward, self.done
+
+    def render(self):
+        pass
+
+    def close(self):
+        pass
 
     def random_action(self):
         acc = np.random.normal(scale=2.0)
@@ -220,7 +227,7 @@ class SimulationEnv(AbstractEnv):
     def __get_reward(self):
         reward = 0.0
         for reward_term_name, reward_term_coeff in self.reward_coeff.items():
-            reward_func_name = "__get_" + reward_term_name
+            reward_func_name = "get_" + reward_term_name
             reward_func = getattr(self, reward_func_name)
             reward += reward_term_coeff * reward_func()
 
@@ -229,7 +236,7 @@ class SimulationEnv(AbstractEnv):
     def __dst_reached(self):
         return self.agent_state.polygon.intersects(self.dst)
 
-    def __get_dst_reward(self):
+    def get_dst_reward(self):
         if self.__dst_reached():
             frames_pct_spent = self.frame_idx / (self.max_frames - 1)
             return 1.0 - 0.5 * frames_pct_spent
@@ -241,7 +248,7 @@ class SimulationEnv(AbstractEnv):
         else:
             return 0.0
 
-    def __get_speed_penalty(self):
+    def get_speed_penalty(self):
         current_speed_limit = self.map_state.get('speed_limit',
                                                  self.default_speed_limit)
         v = self.agent_state.speed
@@ -250,7 +257,8 @@ class SimulationEnv(AbstractEnv):
 
         return max(v_normalized - 1.0, 0.0)
 
-    def __get_collision_penalty(self):
+    def get_collision_penalty(self):
+        # use x, y, l, w, heading columns to build polygon
         social_state_arr = self.social_state[:, [0, 1, 3, 4, 6]]
         social_polygons = batch_build_polygon(social_state_arr)
 
@@ -261,7 +269,7 @@ class SimulationEnv(AbstractEnv):
 
         return 0
 
-    def __get_off_lane_penalty(self):
+    def get_off_lane_penalty(self):
         lane_center = self.map_state.get('lane', None)
         road_lines = self.map_state.get('road_line', [])
         road_edges = self.map_state.get('road_edge', [])
@@ -285,7 +293,7 @@ class SimulationEnv(AbstractEnv):
 
         return penalty
 
-    def __get_violate_traffic_light_penalty(self):
+    def get_violate_traffic_light_penalty(self):
         if self.light_state['state'] == "STOP":
             stop_point = self.light_state['stop_point']
 
@@ -305,3 +313,13 @@ class SimulationEnv(AbstractEnv):
                 return min(abs(vec_projection), 20) * 0.05 * min(v, 30) / 30.0
 
         return 0
+
+
+if __name__ == "__main__":
+    sim_env = SimulationEnv(["1.txt"])
+
+    t0 = time.time()
+    sim_env.reset()
+    for i in range(99):
+        sim_env.step(np.array([1.0, 0]))
+    print(time.time() - t0)
