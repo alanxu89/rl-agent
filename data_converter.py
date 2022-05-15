@@ -14,7 +14,7 @@ class DataConverter:
     """
 
     @abstractmethod
-    def read(self, data_file):
+    def read(self, data_files):
         pass
 
     @abstractmethod
@@ -32,8 +32,8 @@ class WaymoDataConverter(DataConverter):
         self.record_idx = -1
         self.mph_to_mps = 1609.0 / 3600
 
-    def read(self, data_file):
-        self.dataset = list(tf.data.TFRecordDataset([data_file]))
+    def read(self, data_files):
+        self.dataset = list(tf.data.TFRecordDataset(data_files))
         self.num_records = len(self.dataset)
 
     def get_a_scenario(self, idx=None, mode='sequential'):
@@ -49,6 +49,10 @@ class WaymoDataConverter(DataConverter):
         scenario = self.__parse_record(raw_record.numpy())
 
         ts = scenario.timestamps_seconds
+
+        tracks_to_predict = []
+        for to_predict in scenario.tracks_to_predict:
+            tracks_to_predict.append(to_predict.track_index)
 
         tracks = []
         for track in scenario.tracks:
@@ -124,6 +128,7 @@ class WaymoDataConverter(DataConverter):
         scenario_data = {
             'scenario_id': scenario.scenario_id,
             'timestamps': ts,
+            'tracks_to_predict': tracks_to_predict,
             'tracks': tracks,
             'lanes': lanes,
             'lanes_speed_limit': lanes_speed_limit,
