@@ -7,6 +7,7 @@ import time
 import numpy as np
 from shapely.geometry import Point, LineString, Polygon
 
+from data_converter import WaymoDataConverter
 from utils import build_polygon, batch_build_polygon
 
 
@@ -104,15 +105,15 @@ class SimulationEnv(AbstractEnv):
         self.agent_state = AgentState()
         self.social_state = None
         # lane speed limit info, etc
-        self.map_state = {}
+        self.cur_map_state = {}
         # light state for agent's current lane, with state and stop_point
-        self.light_state = {"state": "GO", "stop_point": np.zeros(2)}
+        self.cur_light_state = {"state": "GO", "stop_point": np.zeros(2)}
 
         self.agent_states = []
 
         self.dst = None
 
-        self.original_distance_to_dst = 0.0
+        self.start_to_dst = 0.0
 
         self.done = False
 
@@ -127,12 +128,20 @@ class SimulationEnv(AbstractEnv):
             'violate_traffic_light_penalty': -1.0
         }
 
-    def reset(self):
-        self.frame_idx = 0
-        self.cur_data_file = self.data_files[random.randint(
-            0, self.n_files - 1)]
+        self.data_converter = WaymoDataConverter()
+        self.data_converter.read(self.data_files)
 
-        self.scenario['agent_features'] = np.random.normal(size=[100, 10])
+    def reset(self):
+        self.done = False
+        self.frame_idx = 0
+        scenario = self.data_converter.get_a_scenario()
+        print(scenario['scenario_id'])
+
+        self.max_frames = len(scenario['timestamps'])
+
+        agent_track = scenario['tracks_to_predict'][0]
+        self.scenario['agent_features'] = scenario['tracks'][agent_track]
+
         agent_init_state = self.scenario['agent_features'][self.frame_idx]
         self.agent_state = AgentState(agent_init_state[0], agent_init_state[1],
                                       agent_init_state[2], agent_init_state[3],
@@ -144,17 +153,26 @@ class SimulationEnv(AbstractEnv):
         self.dst = Point(self.scenario['agent_features'][-1, 0],
                          self.scenario['agent_features'][-1, 1])
 
-        self.original_distance_to_dst = self.agent_state.position.distance(
-            self.dst)
+        self.start_to_dst = self.agent_state.position.distance(self.dst)
 
-        self.scenario['social_features'] = np.random.normal(size=[32, 100, 10])
+        self.scenario['social_features'] = np.delete(scenario['tracks'],
+                                                     agent_track, 0)
         self.social_state = self.scenario['social_features'][:, self.frame_idx]
 
-        self.scenario['map_features'] = np.random.normal(size=[64, 256, 2])
+        self.scenario['map_features'] = {
+            'lanes': scenario['lanes'],
+            'lanes_speed_limit': scenario['lanes_speed_limit'],
+            'road_edges': scenario['road_edges'],
+            'road_lines': scenario['road_lines'],
+            'road_lines_type': scenario['road_lines_type']
+        }
 
-        self.scenario['light_features'] = np.random.normal(size=[4, 3])
+        self.scenario['light_features'] = scenario['dynamics_map_states']
 
     def step(self, action):
+        if self.done:
+            return None, None, None
+
         self.frame_idx += 1
 
         # update agent
@@ -243,14 +261,13 @@ class SimulationEnv(AbstractEnv):
 
         if self.done:
             distance_to_dst = self.agent_state.position.distance(self.dst)
-            return 0.5 * (1.0 -
-                          distance_to_dst / self.original_distance_to_dst)
+            return 0.5 * (1.0 - distance_to_dst / self.start_to_dst)
         else:
             return 0.0
 
     def get_speed_penalty(self):
-        current_speed_limit = self.map_state.get('speed_limit',
-                                                 self.default_speed_limit)
+        current_speed_limit = self.cur_map_state.get('speed_limit',
+                                                     self.default_speed_limit)
         v = self.agent_state.speed
 
         v_normalized = v / current_speed_limit
@@ -270,9 +287,9 @@ class SimulationEnv(AbstractEnv):
         return 0
 
     def get_off_lane_penalty(self):
-        lane_center = self.map_state.get('lane', None)
-        road_lines = self.map_state.get('road_line', [])
-        road_edges = self.map_state.get('road_edge', [])
+        lane_center = self.cur_map_state.get('lane', None)
+        road_lines = self.cur_map_state.get('road_line', [])
+        road_edges = self.cur_map_state.get('road_edge', [])
 
         penalty = 0
         if lane_center is not None:
@@ -294,8 +311,8 @@ class SimulationEnv(AbstractEnv):
         return penalty
 
     def get_violate_traffic_light_penalty(self):
-        if self.light_state['state'] == "STOP":
-            stop_point = self.light_state['stop_point']
+        if self.cur_light_state['state'] == "STOP":
+            stop_point = self.cur_light_state['stop_point']
 
             agent_to_stop_point = np.array([
                 stop_point[1] - self.agent_state.y,
@@ -316,10 +333,14 @@ class SimulationEnv(AbstractEnv):
 
 
 if __name__ == "__main__":
-    sim_env = SimulationEnv(["1.txt"])
+    sim_env = SimulationEnv([
+        "/home/alanxu/Downloads/waymo_motion_data/"
+        "uncompressed_scenario_training_training.tfrecord-00491-of-01000"
+    ])
 
     t0 = time.time()
-    sim_env.reset()
-    for i in range(99):
-        sim_env.step(np.array([1.0, 0]))
+    for _ in range(10):
+        sim_env.reset()
+        for i in range(99):
+            sim_env.step(np.array([1.0, 0]))
     print(time.time() - t0)
