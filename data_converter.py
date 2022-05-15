@@ -68,47 +68,39 @@ class WaymoDataConverter(DataConverter):
         tracks = np.array(tracks)
 
         lanes = []
-        lanes_speed_limit = []
         for map_feature in scenario.map_features:
             if map_feature.HasField('lane'):
-                lane_data = []
+                if len(map_feature.lane.polyline) < 2:
+                    continue
+                polyline = []
                 for point in map_feature.lane.polyline:
-                    lane_data.append([
-                        point.x,
-                        point.y,
-                        point.z,
-                    ])
-                lane_data = np.array(lane_data)
-                lanes.append(lane_data)
-                lanes_speed_limit.append(map_feature.lane.speed_limit_mph *
-                                         self.mph_to_mps)
+                    polyline.append([point.x, point.y])
+                polyline = np.array(polyline)
+                lane_spd_lmt = map_feature.lane.speed_limit_mph * self.mph_to_mps
+                lanes.append({
+                    'id': map_feature.id,
+                    'polyline': polyline,
+                    "speed_limit": lane_spd_lmt,
+                })
 
         road_edges = []
         for map_feature in scenario.map_features:
             if map_feature.HasField('road_edge'):
-                lane_data = []
+                polyline = []
                 for point in map_feature.road_edge.polyline:
-                    lane_data.append([
-                        point.x,
-                        point.y,
-                        point.z,
-                    ])
-                lane_data = np.array(lane_data)
-                road_edges.append(lane_data)
+                    polyline.append([point.x, point.y])
+                polyline = np.array(polyline)
+                road_edges.append(polyline)
 
         road_lines = []
         road_lines_type = []
         for map_feature in scenario.map_features:
             if map_feature.HasField('road_line'):
-                lane_data = []
+                polyline = []
                 for point in map_feature.road_line.polyline:
-                    lane_data.append([
-                        point.x,
-                        point.y,
-                        point.z,
-                    ])
-                lane_data = np.array(lane_data)
-                road_lines.append(lane_data)
+                    polyline.append([point.x, point.y])
+                polyline = np.array(polyline)
+                road_lines.append(polyline)
                 road_lines_type.append(map_feature.road_line.type)
 
         dynamics_map_states = []
@@ -118,10 +110,8 @@ class WaymoDataConverter(DataConverter):
                 dynamic_state = {}
                 dynamic_state['lane'] = lane_state.lane
                 dynamic_state['state'] = lane_state.state
-                dynamic_state['stop_point'] = np.array([
-                    lane_state.stop_point.x, lane_state.stop_point.y,
-                    lane_state.stop_point.z
-                ])
+                dynamic_state['stop_point'] = np.array(
+                    [lane_state.stop_point.x, lane_state.stop_point.y])
                 dynamic_states.append(dynamic_state)
             dynamics_map_states.append(dynamic_states)
 
@@ -131,7 +121,6 @@ class WaymoDataConverter(DataConverter):
             'tracks_to_predict': tracks_to_predict,
             'tracks': tracks,
             'lanes': lanes,
-            'lanes_speed_limit': lanes_speed_limit,
             'road_edges': road_edges,
             'road_lines': road_lines,
             'road_lines_type': road_lines_type,

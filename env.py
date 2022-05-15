@@ -108,7 +108,7 @@ class SimulationEnv(AbstractEnv):
         self.cur_map_state = {}
         # light state for agent's current lane, with state and stop_point
         self.cur_light_state = {"state": "GO", "stop_point": np.zeros(2)}
-
+        self.lane_light_states = None
         self.agent_states = []
 
         self.dst = None
@@ -160,11 +160,16 @@ class SimulationEnv(AbstractEnv):
         self.social_state = self.scenario['social_features'][:, self.frame_idx]
 
         self.scenario['map_features'] = {
-            'lanes': scenario['lanes'],
-            'lanes_speed_limit': scenario['lanes_speed_limit'],
-            'road_edges': scenario['road_edges'],
-            'road_lines': scenario['road_lines'],
-            'road_lines_type': scenario['road_lines_type']
+            'lanes':
+            scenario['lanes'],
+            'lane_polylines':
+            [LineString(lane['polyline']) for lane in scenario['lanes']],
+            'road_edges':
+            scenario['road_edges'],
+            'road_lines':
+            scenario['road_lines'],
+            'road_lines_type':
+            scenario['road_lines_type']
         }
 
         self.scenario['light_features'] = scenario['dynamics_map_states']
@@ -177,11 +182,17 @@ class SimulationEnv(AbstractEnv):
 
         # update agent
         self.agent_state = self.__apply_vehicle_dynamics(action)
+        self.agent_states.append(self.agent_state)
 
         # update social agents
         self.social_state = self.scenario['social_features'][:, self.frame_idx]
 
-        self.agent_states.append(self.agent_state)
+        self.lane_light_states = self.scenario['light_features'][
+            self.frame_idx]
+
+        self.cur_map_state = self.__find_cur_map_state()
+
+        self.cur_light_state = self.__find_cur_light_state()
 
         new_observation = {}
         new_observation['agent_features'] = np.array(
@@ -242,6 +253,55 @@ class SimulationEnv(AbstractEnv):
                                      self.agent_state.valid)
         return new_agent_state
 
+    def __find_cur_map_state(self):
+        min_dist_to_lane = 1e7
+        min_idx = -1
+        idx = 0
+        for lane_line in self.scenario['map_features']['lane_polylines']:
+            dist_to_lane = self.agent_state.position.distance(lane_line)
+            if dist_to_lane < min_dist_to_lane:
+                min_dist_to_lane = dist_to_lane
+                min_idx = idx
+            idx += 1
+
+        if min_idx < 0:
+            return {}
+
+        cur_lane = self.scenario['map_features']['lane_polylines'][min_idx]
+        cur_lane_spd_lmt = self.scenario['map_features']['lanes'][min_idx][
+            'speed_limit']
+        if cur_lane_spd_lmt < 1.0:
+            cur_lane_spd_lmt = self.default_speed_limit
+
+        return {
+            "lane_id": self.scenario['map_features']['lanes'][min_idx]['id'],
+            "lane": cur_lane,
+            "speed_limit": cur_lane_spd_lmt,
+            # TODO(alanxu): add road lines and edges data
+            "road_lines": [],
+            "road_edges": [],
+        }
+
+    def __find_cur_light_state(self):
+        if 'lane_id' not in self.cur_map_state:
+            # if cur lane is not available
+            return {"state": "GO", "stop_point": np.zeros(2)}
+
+        cur_lane_id = self.cur_map_state.get('lane_id')
+        cur_light_state = "GO"
+        stop_point = np.zeros(2)
+        for lane_light_state in self.lane_light_states:
+            if cur_lane_id == lane_light_state['lane']:
+                light_state = lane_light_state['state']
+                if light_state == 1 or light_state == 4 or light_state == 7:
+                    cur_light_state = "STOP"
+                    stop_point = lane_light_state['stop_point']
+                    break
+        return {
+            "state": cur_light_state,
+            "stop_point": stop_point,
+        }
+
     def __get_reward(self):
         reward = 0.0
         for reward_term_name, reward_term_coeff in self.reward_coeff.items():
@@ -288,24 +348,21 @@ class SimulationEnv(AbstractEnv):
 
     def get_off_lane_penalty(self):
         lane_center = self.cur_map_state.get('lane', None)
-        road_lines = self.cur_map_state.get('road_line', [])
-        road_edges = self.cur_map_state.get('road_edge', [])
+        road_lines = self.cur_map_state.get('road_lines', [])
+        road_edges = self.cur_map_state.get('road_edges', [])
 
         penalty = 0
         if lane_center is not None:
-            center_line = LineString(lane_center)
             distance_to_centerline = self.agent_state.position.distance(
-                center_line)
+                lane_center)
             penalty += 0.01 * distance_to_centerline**2
 
         for road_line in road_lines:
-            road_separate_line = LineString(road_line)
-            if self.agent_state.polygon.intersects(road_separate_line):
+            if self.agent_state.polygon.intersects(road_line):
                 penalty += 0.1
 
         for road_edge in road_edges:
-            edge_line = LineString(road_edge)
-            if self.agent_state.polygon.intersects(edge_line):
+            if self.agent_state.polygon.intersects(road_edge):
                 penalty += 0.5
 
         return penalty
@@ -318,10 +375,12 @@ class SimulationEnv(AbstractEnv):
                 stop_point[1] - self.agent_state.y,
                 stop_point[0] - self.agent_state.x
             ])
-            vec_projection = agent_to_stop_point * np.array([
-                math.cos(self.agent_state.heading),
-                math.sin(self.agent_state.heading)
-            ])
+            vec_projection = np.dot(
+                agent_to_stop_point,
+                np.array([
+                    math.cos(self.agent_state.heading),
+                    math.sin(self.agent_state.heading)
+                ]))
 
             v = self.agent_state.speed
 
@@ -339,8 +398,8 @@ if __name__ == "__main__":
     ])
 
     t0 = time.time()
-    for _ in range(10):
+    for _ in range(111):
         sim_env.reset()
-        for i in range(99):
+        for i in range(90):
             sim_env.step(np.array([1.0, 0]))
     print(time.time() - t0)
