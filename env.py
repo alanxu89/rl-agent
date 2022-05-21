@@ -134,7 +134,7 @@ class SimulationEnv(AbstractEnv):
     def reset(self):
         self.done = False
         self.frame_idx = 0
-        scenario = self.data_converter.get_a_scenario()
+        scenario = self.data_converter.get_a_scenario(idx=0)
         print(scenario['scenario_id'])
 
         self.max_frames = len(scenario['timestamps'])
@@ -210,6 +210,8 @@ class SimulationEnv(AbstractEnv):
         return new_observation, reward, self.done
 
     def render(self):
+        # TODO(alanxu): render lanes, road lines, road edges, agent/social
+        # positions and light state(color/stop_point)
         pass
 
     def close(self):

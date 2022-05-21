@@ -7,7 +7,7 @@ import ray
 import numpy as np
 
 
-# @ray.remote
+@ray.remote
 class ReplayBuffer:
     """
     Dict Replay buffer used in off-policy algorithms like SAC/TD3.

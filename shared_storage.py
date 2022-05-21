@@ -1,9 +1,6 @@
 import copy
 import os
 import ray
-import numpy as np
-
-import tensorflow as tf
 
 
 @ray.remote
@@ -36,3 +33,6 @@ class SharedStorage:
             self.current_checkpoint.update(keys)
         else:
             raise TypeError
+
+    def get_batch(self):
+        return {}
