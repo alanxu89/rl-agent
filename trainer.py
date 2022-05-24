@@ -25,7 +25,7 @@ def set_gpu_memory_growth():
             print(e)
 
 
-@ray.remote
+# @ray.remote
 class Trainer:
 
     def __init__(self, config, initial_checkpoint):
@@ -58,77 +58,89 @@ class Trainer:
                                   shared_storage: SharedStorage):
 
         # Wait for the replay buffer to be filled
-        while ray.get(shared_storage.get_info.remote("num_played_games")) < 1:
+        while ray.get(shared_storage.get_info("num_played_games")) < 1:
             time.sleep(1)
 
-        next_batch = replay_buffer.get_batch.remote()
+        next_batch = replay_buffer.get_batch()
 
         while self.training_step < self.config.training_steps and not ray.get(
-                shared_storage.get_info.remote("terminate")):
+                shared_storage.get_info("terminate")):
             print("training steps {} and terminate status {}".format(
                 self.training_step,
-                ray.get(shared_storage.get_info.remote("terminate"))))
-            batch = replay_buffer.get_batch.remote()
+                ray.get(shared_storage.get_info("terminate"))))
+            batch = replay_buffer.get_batch()
             priorities, total_loss, value_loss, reward_loss, policy_loss = self.update_weights(
                 batch)
 
-            if self.config.PER:
-                # to be implemented
-                # Save new priorities in the replay buffer (See https://arxiv.org/abs/1803.00933)
-                # replay_buffer.update_priorities.remote(priorities, index_batch)
-                a = 1
-
             if self.training_step % self.config.checkpoint_interval == 0:
-                shared_storage.set_info.remote({
+                shared_storage.set_info({
                     "weights":
                     copy.deepcopy(self.model.get_weights()),
                     "optimizer_state":
                     tf.keras.optimizers.serialize(self.optimizer)
                 })
                 if self.config.save_model:
-                    shared_storage.save_checkpoint.remote()
-            shared_storage.set_info.remote({
-                "training_step":
-                self.training_step,
-                "lr":
-                self.optimizer.get_config()["lr"],
-                "total_loss":
-                total_loss,
-                "value_loss":
-                value_loss,
-                "reward_loss":
-                reward_loss,
-                "policy_loss":
-                policy_loss,
+                    shared_storage.save_checkpoint()
+            shared_storage.set_info({
+                "training_step": self.training_step,
+                "lr": self.optimizer.get_config()["lr"],
+                "total_loss": total_loss,
+                "value_loss": value_loss,
+                "reward_loss": reward_loss,
+                "policy_loss": policy_loss,
             })
 
-    def train_step(self, batch):
-        """ train step """
-        (
-            observation_batch,
-            action_batch,
-            target_reward,
-            target_policy,
-        ) = batch
+    def train_step(self, replay_data):
+        """ TD3 train step
+        """
+        actor_losses, critic_losses = [], []
 
-        with tf.GradientTape() as tape:
-            if self.config.PER:
-                weight_batch = tf.Tensor(weight_batch.copy())
+        self.training_step += 1
+        # Sample replay buffer
 
-            actions = self.model(observation_batch)
+        # Select action according to policy and add clipped noise
+        noise = replay_data.actions.clone().data.normal_(
+            0, self.target_policy_noise)
+        noise = noise.clamp(-self.target_noise_clip, self.target_noise_clip)
+        next_actions = (self.actor_target(replay_data.next_observations) +
+                        noise).clamp(-1, 1)
 
-            seq_len = action_batch.shape[-1]
+        # Compute the next Q-values: min over all critics targets
+        next_q_values = tf.concat(self.critic_target(
+            replay_data.next_observations, next_actions),
+                                  dim=1)
+        next_q_values, _ = tf.min(next_q_values, dim=1, keepdim=True)
+        target_q_values = replay_data.rewards + (
+            1 - replay_data.dones) * self.gamma * next_q_values
 
-            loss = 0
+        with tf.GradientTape() as critic_tape:
+            # Get current Q-values estimates for each critic network
+            current_q_values = self.critic(replay_data.observations,
+                                           replay_data.actions)
+            # Compute critic loss
+            critic_loss = sum([
+                tf.reduce_mean(tf.square(current_q - target_q_values))
+                for current_q in current_q_values
+            ])
+            critic_losses.append(critic_loss.item())
 
-            if self.config.PER:
-                loss *= weight_batch
-            loss = tf.reduce_mean(loss)
-
-        grads = tape.gradient(loss, self.model.trainable_weights)
+        grads = critic_tape.gradient(critic_loss, self.model.trainable_weights)
         self.optimizer.apply_gradients(zip(grads,
                                            self.model.trainable_weights))
-        self.training_step += 1
+
+        # Delayed policy updates
+        if self.training_step % self.policy_delay == 0:
+            with tf.GradientTape() as actor_tape:
+                # Compute actor loss
+                actor_loss = -self.critic.q1_forward(
+                    replay_data.observations,
+                    self.actor(replay_data.observations)).mean()
+                actor_losses.append(actor_loss.item())
+
+            grads = actor_tape.gradient(actor_loss,
+                                        self.actor.trainable_weights)
+            self.optimizer.apply_gradients(
+                zip(grads, self.actor.trainable_weights))
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
