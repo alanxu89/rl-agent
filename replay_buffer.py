@@ -7,7 +7,7 @@ import ray
 import numpy as np
 
 
-@ray.remote
+# @ray.remote
 class ReplayBuffer:
     """
     Dict Replay buffer used in off-policy algorithms like SAC/TD3.
@@ -103,7 +103,7 @@ class ReplayBuffer:
             self.full = True
             self.pos = 0
 
-    def sample(self, batch_size: int):
+    def get_batch(self, batch_size: int = 128):
         """
         Sample elements from the replay buffer.
 
