@@ -5,11 +5,10 @@ import keras
 from keras import layers
 
 
-class BaselinePolicyNet(keras.Model):
+class RepresentationNetwork(keras.Model):
 
     def __init__(
         self,
-        action_dim=2,
         max_social_agents=32,
         max_lanes=64,
         max_lane_seq=256,
@@ -17,8 +16,6 @@ class BaselinePolicyNet(keras.Model):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-
-        self.action_dim = action_dim
 
         self.agent_head = keras.Sequential([
             layers.Dense(64, activation='relu'),
@@ -41,12 +38,6 @@ class BaselinePolicyNet(keras.Model):
             layers.Flatten(),
             layers.Dense(64, activation='relu'),
             layers.Dense(64, activation='relu'),
-        ])
-
-        self.policy_head = keras.Sequential([
-            layers.Dense(64, activation='relu'),
-            layers.Dense(64, activation='relu'),
-            layers.Dense(self.action_dim),
         ])
 
     def call(self, inputs):
@@ -72,16 +63,45 @@ class BaselinePolicyNet(keras.Model):
                                   [map_feat_shape[0], map_feat_shape[1], -1])
         map_head_out = tf.reduce_mean(map_head_out, axis=1)
 
-        combined_head = tf.concat(
-            [agent_head_out, social_head_out, map_head_out], axis=-1)
-
-        out = self.policy_head(combined_head)
+        out = tf.concat([agent_head_out, social_head_out, map_head_out],
+                        axis=-1)
 
         return out
 
 
+class ValueNetwork(keras.Model):
+
+    def __init__(self):
+        super(ValueNetwork, self).__init__()
+        self.value = keras.Sequential([
+            layers.Dense(64, activation='relu'),
+            layers.Dense(64, activation='relu'),
+            layers.Dense(64, activation='relu'),
+            layers.Dense(1),
+        ])
+
+    def call(self, x):
+        return self.value(x)
+
+
+class PolicyNetwork(keras.Model):
+
+    def __init__(self, action_space_size):
+        super(ValueNetwork, self).__init__()
+
+        self.policy = keras.Sequential([
+            layers.Dense(64, activation='relu'),
+            layers.Dense(64, activation='relu'),
+            layers.Dense(64, activation='relu'),
+            layers.Dense(action_space_size),
+        ])
+
+    def call(self, x):
+        return self.policy(x)
+
+
 if __name__ == "__main__":
-    net = BaselinePolicyNet()
+    net = RepresentationNetwork()
 
     out = net([
         tf.random.normal([64, 6]),
