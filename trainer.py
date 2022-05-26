@@ -5,7 +5,10 @@ import ray
 import numpy as np
 import tensorflow as tf
 
-from models import BaselinePolicyNet
+from keras import optimizers
+
+from env import SimulationEnv
+from models import RepresentationNetwork, ActorNetwork, CriticNetwork
 from replay_buffer import ReplayBuffer
 from shared_storage import SharedStorage
 
@@ -34,25 +37,30 @@ class Trainer:
         np.random.seed(self.config.seed)
         tf.random.set_seed(self.config.seed)
 
-        self.model = BaselinePolicyNet()
-        initial_weights = copy.deepcopy(initial_checkpoint["weights"])
-        if initial_weights:
-            self.model.set_weights(initial_weights)
+        self.critic = CriticNetwork()
+        self.actor = ActorNetwork()
 
-        self.training_step = initial_checkpoint["training_step"]
+        self.critic_target = CriticNetwork()
+        self.actor_target = ActorNetwork()
+
+        # initial_weights = copy.deepcopy(initial_checkpoint["weights"])
+        # if initial_weights:
+        #     self.model.set_weights(initial_weights)
+
+        # self.training_step = initial_checkpoint["training_step"]
 
         self.lr_schedule = CustomSchedule(self.config.lr_init,
                                           self.config.lr_decay_rate,
                                           self.config.lr_decay_steps)
 
-        self.optimizer = tf.keras.optimizers.Adam(
+        self.optimizer = optimizers.Adam(
             self.lr_schedule
             # weight_decay=self.config.weight_decay,
         )
 
-        if initial_checkpoint["optimizer_state"] is not None:
-            self.optimizer.set_weights(
-                copy.deepcopy(initial_checkpoint["optimizer_state"]))
+        # if initial_checkpoint["optimizer_state"] is not None:
+        #     self.optimizer.set_weights(
+        #         copy.deepcopy(initial_checkpoint["optimizer_state"]))
 
     def continuous_update_weights(self, replay_buffer: ReplayBuffer,
                                   shared_storage: SharedStorage):
@@ -92,6 +100,8 @@ class Trainer:
 
     def train_step(self, replay_data):
         """ TD3 train step
+        https://spinningup.openai.com/en/latest/algorithms/td3.html#pseudocode
+        https://zhuanlan.zhihu.com/p/357719456
         """
         actor_losses, critic_losses = [], []
 
@@ -99,17 +109,15 @@ class Trainer:
         # Sample replay buffer
 
         # Select action according to policy and add clipped noise
-        noise = replay_data.actions.clone().data.normal_(
-            0, self.target_policy_noise)
-        noise = noise.clamp(-self.target_noise_clip, self.target_noise_clip)
-        next_actions = (self.actor_target(replay_data.next_observations) +
-                        noise).clamp(-1, 1)
+        noise = tf.clip_by_value(
+            tf.random.normal(tf.shape(replay_data.action)), -0.1, 0.1)
+        next_actions = tf.clip_by_value(
+            self.actor_target(replay_data.next_state) + noise, -1, 1)
 
         # Compute the next Q-values: min over all critics targets
-        next_q_values = tf.concat(self.critic_target(
-            replay_data.next_observations, next_actions),
-                                  dim=1)
-        next_q_values, _ = tf.min(next_q_values, dim=1, keepdim=True)
+        q1_target, q2_target = self.critic_target(
+            replay_data.next_observations, next_actions)
+        next_q_values = tf.minimum(q1_target, q2_target)
         target_q_values = replay_data.rewards + (
             1 - replay_data.dones) * self.gamma * next_q_values
 
@@ -124,26 +132,39 @@ class Trainer:
             ])
             critic_losses.append(critic_loss.item())
 
-        grads = critic_tape.gradient(critic_loss, self.model.trainable_weights)
-        self.optimizer.apply_gradients(zip(grads,
-                                           self.model.trainable_weights))
+        grads = critic_tape.gradient(critic_loss,
+                                     self.critic.trainable_weights)
+        self.optimizer.apply_gradients(
+            zip(grads, self.critic.trainable_weights))
 
         # Delayed policy updates
         if self.training_step % self.policy_delay == 0:
             with tf.GradientTape() as actor_tape:
                 # Compute actor loss
-                actor_loss = -self.critic.q1_forward(
-                    replay_data.observations,
-                    self.actor(replay_data.observations)).mean()
-                actor_losses.append(actor_loss.item())
+                q1, q2 = self.critic(replay_data.state,
+                                     self.actor(replay_data.state))
+                actor_loss = -q1
+                actor_losses.append(actor_loss)
 
             grads = actor_tape.gradient(actor_loss,
                                         self.actor.trainable_weights)
             self.optimizer.apply_gradients(
                 zip(grads, self.actor.trainable_weights))
 
+            for param, target_param in zip(
+                    self.critic.trainable_weights,
+                    self.critic_target.trainable_weights):
+                target_param.assign(self.tau * param +
+                                    (1 - self.tau) * target_param)
 
-class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+            for param, target_param in zip(
+                    self.actor.trainable_weights,
+                    self.actor_target.trainable_weights):
+                target_param.assign(self.tau * param +
+                                    (1 - self.tau) * target_param)
+
+
+class CustomSchedule(optimizers.schedules.LearningRateSchedule):
 
     def __init__(self, lr_init, lr_decay_rate, lr_decay_steps):
         super().__init__()
