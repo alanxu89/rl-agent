@@ -1,4 +1,5 @@
 import time
+import copy
 
 import tensorflow as tf
 import keras
@@ -69,32 +70,74 @@ class RepresentationNetwork(keras.Model):
         return out
 
 
-class ValueNetwork(keras.Model):
+class CriticNetwork(keras.Model):
 
-    def __init__(self):
-        super(ValueNetwork, self).__init__()
-        self.value = keras.Sequential([
+    def __init__(self, encoded_state_space=192, action_space=2):
+        super(CriticNetwork, self).__init__()
+
+        self.encoded_state_space = encoded_state_space
+        self.action_space = action_space
+
+        self.action_head = keras.Sequential([
             layers.Dense(64, activation='relu'),
             layers.Dense(64, activation='relu'),
             layers.Dense(64, activation='relu'),
-            layers.Dense(1),
         ])
 
-    def call(self, x):
-        return self.value(x)
+        self.concat = layers.Concatenate(axis=-1)
+
+        self.dense11 = layers.Dense(64, activation='relu')
+        self.dense12 = layers.Dense(64, activation='relu')
+        self.dense13 = layers.Dense(1, activation='relu')
+
+        self.dense21 = layers.Dense(64, activation='relu')
+        self.dense22 = layers.Dense(64, activation='relu')
+        self.dense23 = layers.Dense(1, activation='relu')
+
+        self.__build_model()
+
+    def __build_model(self):
+        self.build([(None, self.encoded_state_space),
+                    [None, self.action_space]])
+
+    def call(self, inputs):
+        """
+        inputs: [encoded_state, action]
+        """
+        state, action = inputs
+        action_out = self.action_head(action)
+        # print(state.shape)
+        # print(action_out.shape)
+        state_action = self.concat([state, action_out])
+        # print(state_action.shape)
+
+        out = self.dense11(state_action)
+        out = self.dense12(out)
+        q1 = self.dense13(out)
+
+        out = self.dense21(state_action)
+        out = self.dense22(out)
+        q2 = self.dense23(out)
+        return q1, q2
 
 
-class PolicyNetwork(keras.Model):
+class ActorNetwork(keras.Model):
 
-    def __init__(self, action_space_size):
-        super(ValueNetwork, self).__init__()
+    def __init__(self, encoded_state_space=192, action_space=2):
+        super(ActorNetwork, self).__init__()
 
+        self.encoded_state_space = encoded_state_space
         self.policy = keras.Sequential([
             layers.Dense(64, activation='relu'),
             layers.Dense(64, activation='relu'),
             layers.Dense(64, activation='relu'),
-            layers.Dense(action_space_size),
+            layers.Dense(action_space),
         ])
+
+        self.__build_model()
+
+    def __build_model(self):
+        self.build((None, self.encoded_state_space))
 
     def call(self, x):
         return self.policy(x)
@@ -119,3 +162,10 @@ if __name__ == "__main__":
         print(out.shape)
 
     print(time.time() - t0)
+
+    critic = CriticNetwork()
+    print(critic.summary())
+
+    critic_target = CriticNetwork()
+    critic_target.set_weights(critic.get_weights())
+    print(critic_target.summary())
