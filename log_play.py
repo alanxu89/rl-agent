@@ -12,7 +12,7 @@ from env import SimulationEnv
 
 
 @ray.remote
-class LogPlay:
+class LogPlayer:
 
     def __init__(self, config, seed):
         self.config = config
