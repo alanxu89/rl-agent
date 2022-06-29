@@ -2,12 +2,14 @@ import os
 import datetime
 import time
 import pickle
+import copy
 
 import tensorflow as tf
 import numpy as np
+import ray
 
 from env import SimulationEnv
-from trainer import Trainer
+from trainer import Trainer, CPUActor
 from replay_buffer import ReplayBuffer
 from shared_storage import SharedStorage
 from log_play import LogPlayer
@@ -25,10 +27,10 @@ class Config:
         #  Path to store the model weights and TensorBoard logs
         print(os.path.dirname(os.path.realpath(__file__)))
         self.results_path = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "/results",
+            os.path.dirname(os.path.realpath(__file__)), "results",
             datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
 
-        print(self.results_path)
+        print("print results path", self.results_path)
         self.save_model = True
         self.training_steps = int(1e6)
         self.batch_size = 256
@@ -64,14 +66,15 @@ class RLAgent:
                 self.config = config
 
         self.num_gpus = len(tf.config.list_physical_devices('GPU'))
-        # ray.init(num_gpus=self.num_gpus, ignore_reinit_error=True)
+        ray.init(num_gpus=self.num_gpus, ignore_reinit_error=True)
 
         np.random.seed(self.config.seed)
         tf.random.set_seed(self.config.seed)
 
         # Checkpoint and replay buffer used to initialize workers
         self.checkpoint = {
-            "weights": None,
+            "state_encoder_weights": None,
+            "actor_weights": None,
             "optimizer_state": None,
             "total_reward": 0,
             "muzero_reward": 0,
@@ -92,10 +95,12 @@ class RLAgent:
 
         self.replay_buffer = {}
 
-        # cpu_actor = CPUActor.remote()
-        # cpu_weights = cpu_actor.get_initial_weights.remote(self.config)
-        # self.checkpoint["weights"], self.summary = copy.deepcopy(
-        #     ray.get(cpu_weights))
+        cpu_actor = CPUActor.remote()
+        cpu_weights = cpu_actor.get_initial_weights.remote(self.config)
+        self.checkpoint["state_encoder_weights"], copy.deepcopy(
+            ray.get(cpu_weights))[0]
+        self.checkpoint["actor_weights"], copy.deepcopy(
+            ray.get(cpu_weights))[1]
 
         # Workers
         self.sim_workers = None
@@ -110,17 +115,17 @@ class RLAgent:
 
         self.shared_storage_worker = SharedStorage.remote(
             self.config, self.checkpoint)
-        self.shared_storage_worker.set_info("terminate", False)
+        self.shared_storage_worker.set_info.remote("terminate", False)
 
         self.replay_buffer_worker = ReplayBuffer.remote(
             self.config.replay_buffer_size)
 
-        self.training_worker = Trainer.options(num_cpus=0, num_gpus=1).remote(
-            self.config, self.replay_buffer_worker, self.shared_storage_worker)
+        # self.training_worker = Trainer.options(num_cpus=0, num_gpus=1).remote(
+        #     self.config, self.replay_buffer_worker, self.shared_storage_worker)
 
         self.sim_workers = [
             LogPlayer.options(num_cpus=1,
-                              num_gpus=0).remote(self.config,
+                              num_gpus=1).remote(self.config,
                                                  self.config.seed + seed)
             for seed in range(self.config.num_workers)
         ]
@@ -130,10 +135,12 @@ class RLAgent:
             sim_worker.continuous_play.remote(self.shared_storage_worker,
                                               self.replay_buffer_worker)
 
-        self.training_worker.train()
+        # self.training_worker.train.remote()
 
-        if log_in_tensorboard:
-            self.logging_loop()
+        for i in range(100):
+            time.sleep(1)
+        # if log_in_tensorboard:
+        #     self.logging_loop()
 
     def logging_loop(self):
 
@@ -169,10 +176,10 @@ class RLAgent:
             "num_played_steps",
             "num_reanalysed_games",
         ]
-        info = self.shared_storage_worker.get_info(keys)
+        info = self.shared_storage_worker.get_info.remote(keys)
         try:
             while info["training_step"] < self.config.training_steps:
-                info = self.shared_storage_worker.get_info(keys)
+                info = self.shared_storage_worker.get_info.remote(keys)
                 # details to be implemented
                 with tf.device('/CPU'):
                     with writer.as_default():
@@ -252,3 +259,5 @@ class RLAgent:
 if __name__ == "__main__":
     print(os.path.realpath(__file__))
     config = Config()
+    rlagent = RLAgent(config)
+    rlagent.train()

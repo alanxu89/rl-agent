@@ -27,7 +27,7 @@ def set_gpu_memory_growth():
             print(e)
 
 
-# @ray.remote
+@ray.remote
 class Trainer:
 
     def __init__(self, config, replay_buffer: ReplayBuffer,
@@ -74,8 +74,10 @@ class Trainer:
 
             if self.step % self.config.checkpoint_interval == 0:
                 self.shared_storage.set_info({
-                    "weights":
-                    copy.deepcopy(self.model.get_weights()),
+                    "state_encoder_weights":
+                    copy.deepcopy(self.state_encoder.get_weights()),
+                    "actor_weights":
+                    copy.deepcopy(self.actor.get_weights()),
                     "optimizer_state":
                     tf.keras.optimizers.serialize(self.optimizer)
                 })
@@ -150,6 +152,20 @@ class Trainer:
                     self.actor_target.trainable_weights):
                 target_param.assign(self.tau * param +
                                     (1 - self.tau) * target_param)
+
+
+@ray.remote(num_cpus=1, num_gpus=0)
+class CPUActor:
+
+    def __init__(self):
+        pass
+
+    def get_initial_weights(self, config):
+        with tf.device('/CPU:0'):
+            state_encoder = RepresentationNetwork()
+            actor = ActorNetwork()
+
+        return state_encoder.get_weights(), actor.get_weights()
 
 
 if __name__ == "__main__":

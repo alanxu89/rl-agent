@@ -3,7 +3,7 @@ import os
 import ray
 
 
-# @ray.remote
+@ray.remote
 class SharedStorage:
 
     def __init__(self, config, checkpoint):
