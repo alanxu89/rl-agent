@@ -135,7 +135,7 @@ class SimulationEnv(AbstractEnv):
         self.done = False
         self.frame_idx = 0
         scenario = self.data_converter.get_a_scenario(idx=0)
-        print(scenario['scenario_id'])
+        print("sceanrio id {}".format(scenario['scenario_id']))
 
         self.max_frames = len(scenario['timestamps'])
 
@@ -173,6 +173,16 @@ class SimulationEnv(AbstractEnv):
         }
 
         self.scenario['light_features'] = scenario['dynamics_map_states']
+
+        observation = {}
+        observation['agent_features'] = np.array(
+            [s.to_array() for s in self.agent_states[-self.obs_len:]])
+        observation['social_features'] = self.scenario['social_features'][
+            max(0, self.frame_idx - self.obs_len):self.frame_idx]
+        observation['map_features'] = self.scenario['map_features']
+        observation['light_features'] = self.scenario['light_features']
+
+        return observation
 
     def step(self, action):
         if self.done:
