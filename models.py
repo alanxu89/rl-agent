@@ -18,6 +18,10 @@ class RepresentationNetwork(keras.Model):
     ):
         super().__init__(*args, **kwargs)
 
+        self.max_social_agents = max_social_agents
+        self.max_lanes = max_lanes
+        self.max_lane_seq = max_lane_seq
+
         self.agent_head = keras.Sequential([
             layers.Dense(64, activation='relu'),
             layers.Dense(64, activation='relu'),
@@ -41,6 +45,16 @@ class RepresentationNetwork(keras.Model):
             layers.Dense(64, activation='relu'),
         ])
 
+        self.__build_model()
+
+    def __build_model(self):
+        self.build([
+            (2, 6),
+            (2, self.max_social_agents, 6),
+            (2, self.max_lanes, self.max_lane_seq, 4),
+        ])
+
+    # @tf.function
     def call(self, inputs):
         agent_feature, social_feature, map_feature = inputs
 
@@ -98,7 +112,7 @@ class CriticNetwork(keras.Model):
 
     def __build_model(self):
         self.build([(None, self.encoded_state_space),
-                    [None, self.action_space]])
+                    (None, self.action_space)])
 
     def call(self, inputs):
         """
@@ -144,7 +158,7 @@ class ActorNetwork(keras.Model):
 
 
 if __name__ == "__main__":
-    net = RepresentationNetwork()
+    net = RepresentationNetwork(8, 16, 64)
 
     out = net([
         tf.random.normal([64, 6]),
@@ -153,13 +167,13 @@ if __name__ == "__main__":
     ])
 
     t0 = time.time()
-    for _ in range(100):
+    for _ in range(1000):
         out = net([
             tf.random.normal([64, 6]),
             tf.random.normal([64, 8, 6]),
             tf.random.normal([64, 16, 64, 4])
         ])
-        print(out.shape)
+        # print(out.shape)
 
     print(time.time() - t0)
 

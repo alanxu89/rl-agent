@@ -96,11 +96,10 @@ class RLAgent:
         self.replay_buffer = {}
 
         cpu_actor = CPUActor.remote()
-        cpu_weights = cpu_actor.get_initial_weights.remote(self.config)
-        self.checkpoint["state_encoder_weights"], copy.deepcopy(
-            ray.get(cpu_weights))[0]
-        self.checkpoint["actor_weights"], copy.deepcopy(
-            ray.get(cpu_weights))[1]
+        cpu_weights = ray.get(cpu_actor.get_initial_weights.remote(
+            self.config))
+        self.checkpoint["state_encoder_weights"] = cpu_weights[0]
+        self.checkpoint["actor_weights"] = cpu_weights[1]
 
         # Workers
         self.sim_workers = None
