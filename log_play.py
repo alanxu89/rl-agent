@@ -17,8 +17,8 @@ class LogPlayer:
     def __init__(self, config, seed):
         self.config = config
         self.data_files = [
-            "/home/alanxu/Downloads/waymo_motion_data/"
-            "uncompressed_scenario_training_training.tfrecord-00491-of-01000"
+            "/home/alanquantum/Downloads/waymo_motion_data/"
+            "uncompressed_scenario_training_training.tfrecord-00000-of-01000"
         ]
         self.env = SimulationEnv(self.data_files)
 
