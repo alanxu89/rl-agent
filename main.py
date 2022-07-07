@@ -12,7 +12,7 @@ from env import SimulationEnv
 from trainer import Trainer, CPUActor
 from replay_buffer import ReplayBuffer
 from shared_storage import SharedStorage
-from log_play import LogPlayer
+from log_play import SimPlayer
 
 
 class Config:
@@ -123,7 +123,7 @@ class RLAgent:
         #     self.config, self.replay_buffer_worker, self.shared_storage_worker)
 
         self.sim_workers = [
-            LogPlayer.options(num_cpus=1,
+            SimPlayer.options(num_cpus=1,
                               num_gpus=1).remote(self.config,
                                                  self.config.seed + seed)
             for seed in range(self.config.num_workers)
@@ -211,7 +211,7 @@ class RLAgent:
         self.shared_storage_worker = None
 
     def test(self, render=True, num_tests=1):
-        sim_worker = LogPlayer(self.config, np.random.randint(10000))
+        sim_worker = SimPlayer(self.config, np.random.randint(10000))
         results = []
 
         for i in range(num_tests):

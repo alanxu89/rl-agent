@@ -12,7 +12,7 @@ from env import SimulationEnv
 
 
 @ray.remote
-class LogPlayer:
+class SimPlayer:
 
     def __init__(self, config, seed):
         self.config = config
@@ -84,8 +84,11 @@ class LogPlayer:
             self.env.render()
 
         while not done:
+            # inference
             encoded_state = self.state_enc(observation)
             action = self.actor(encoded_state) + tf.random.normal([2])
+
+            # simulation
             next_observation, reward, done = self.env.step(action)
 
             if render:
