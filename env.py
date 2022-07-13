@@ -428,5 +428,8 @@ if __name__ == "__main__":
     for _ in range(100):
         sim_env.reset()
         for i in range(90):
-            sim_env.step(np.random.normal(size=(2)))
-        print(time.time() - t0)
+            _, _, done = sim_env.step(np.random.normal(size=(2)))
+            if done:
+                print(i)
+                break
+    print(time.time() - t0)

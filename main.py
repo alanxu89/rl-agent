@@ -12,7 +12,7 @@ from env import SimulationEnv
 from trainer import Trainer, CPUActor
 from replay_buffer import ReplayBuffer
 from shared_storage import SharedStorage
-from log_play import SimPlayer
+from sim_player import SimPlayer
 
 
 class Config:
@@ -20,7 +20,7 @@ class Config:
     def __init__(self):
         self.seed = 0
 
-        self.num_workers = 1
+        self.num_workers = 2
         self.discount = 0.997
 
         # Training
@@ -51,6 +51,10 @@ class Config:
         self.replay_buffer_size = int(1e6)
         # Number of steps in the future to take into account for calculating the target value
         self.td_steps = 10
+
+        self.play_delay = False
+
+        self.ratio = False
 
 
 class RLAgent:

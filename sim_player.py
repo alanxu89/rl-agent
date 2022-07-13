@@ -48,6 +48,21 @@ class SimPlayer:
                                              rd.next_observation, rd.reward,
                                              rd.done, {})
 
+                if self.config.play_delay:
+                    time.sleep(self.config.play_delay)
+
+                if self.config.ratio:
+                    ratio = ray.get(
+                        shared_storage.get_info.remote("training_step")) / max(
+                            1,
+                            ray.get(
+                                shared_storage.get_info.remote(
+                                    "num_played_steps")))
+                    while (ratio < self.config.ratio) and (ray.get(
+                            shared_storage.get_info.remote("training_step")
+                    ) < self.config.training_steps) and not ray.get(
+                            shared_storage.get_info.remote("terminate")):
+                        time.sleep(0.5)
             else:
                 replay_data = self.play(False)
                 shared_storage.set_info.remote({
@@ -56,22 +71,6 @@ class SimPlayer:
                     "total_reward":
                     sum([rd.reward for rd in replay_data]),
                 })
-
-            if not test_mode and self.config.play_delay:
-                time.sleep(self.config.play_delay)
-            if not test_mode and self.config.ratio:
-                ratio = ray.get(
-                    shared_storage.get_info.remote("training_step")) / max(
-                        1,
-                        ray.get(
-                            shared_storage.get_info.remote(
-                                "num_played_steps")))
-                while (ratio < self.config.ratio) and (
-                        ray.get(
-                            shared_storage.get_info.remote("training_step")) <
-                        self.config.training_steps) and not ray.get(
-                            shared_storage.get_info.remote("terminate")):
-                    time.sleep(0.5)
 
         self.close_game()
 
@@ -87,7 +86,10 @@ class SimPlayer:
         while not done:
             # inference
             encoded_state = self.state_enc(obs_array)
-            action = self.actor(encoded_state) + tf.random.normal([2])
+            action = self.actor(encoded_state)
+            # print(action)
+            action = tf.squeeze(action) + tf.random.normal([2])
+            # print(action)
 
             # simulation
             next_observation, reward, done = self.env.step(action)
