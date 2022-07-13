@@ -11,6 +11,7 @@ class RepresentationNetwork(keras.Model):
     def __init__(
         self,
         max_social_agents=32,
+        obs_len=10,
         max_lanes=64,
         max_lane_seq=256,
         *args,
@@ -18,19 +19,19 @@ class RepresentationNetwork(keras.Model):
     ):
         super().__init__(*args, **kwargs)
 
+        self.obs_len = obs_len
         self.max_social_agents = max_social_agents
         self.max_lanes = max_lanes
         self.max_lane_seq = max_lane_seq
 
-        self.agent_head = keras.Sequential([
-            layers.Dense(64, activation='relu'),
-            layers.Dense(64, activation='relu'),
-            layers.Dense(64, activation='relu'),
-        ])
-
-        self.social_head = keras.Sequential([
-            layers.Dense(64, activation='relu'),
-            layers.Dense(64, activation='relu'),
+        self.traj_head = keras.Sequential([
+            layers.Conv1D(32, 3, activation='relu'),
+            # layers.AveragePooling1D(),
+            layers.Conv1D(64, 3, activation='relu'),
+            # layers.AveragePooling1D(),
+            layers.Conv1D(64, 3, activation='relu'),
+            layers.Flatten(),
+            layers.Dense(128, activation='relu'),
             layers.Dense(64, activation='relu'),
         ])
 
@@ -49,21 +50,23 @@ class RepresentationNetwork(keras.Model):
 
     def __build_model(self):
         self.build([
-            (2, 6),
-            (2, self.max_social_agents, 6),
-            (2, self.max_lanes, self.max_lane_seq, 4),
+            (2, self.obs_len, 10),
+            (2, self.max_social_agents, self.obs_len, 10),
+            (2, self.max_lanes, self.max_lane_seq, 2),
         ])
 
     # @tf.function
     def call(self, inputs):
         agent_feature, social_feature, map_feature = inputs
 
-        agent_head_out = self.agent_head(agent_feature)
+        agent_head_out = self.traj_head(agent_feature)
 
         social_feat_shape = social_feature.shape
-        social_feature = tf.reshape(
-            social_feature, [social_feat_shape[0] * social_feat_shape[1], -1])
-        social_head_out = self.social_head(social_feature)
+        social_feature = tf.reshape(social_feature, [
+            social_feat_shape[0] * social_feat_shape[1], social_feat_shape[2],
+            social_feat_shape[3]
+        ])
+        social_head_out = self.traj_head(social_feature)
         social_head_out = tf.reshape(
             social_head_out, [social_feat_shape[0], social_feat_shape[1], -1])
         social_head_out = tf.reduce_mean(social_head_out, axis=1)
@@ -158,6 +161,22 @@ class ActorNetwork(keras.Model):
 
 
 if __name__ == "__main__":
+    traj_head = keras.Sequential([
+        layers.Conv1D(32, 3, activation='relu', input_shape=(10, 4)),
+        # layers.AveragePooling1D(),
+        layers.Conv1D(64, 3, activation='relu'),
+        # layers.AveragePooling1D(),
+        layers.Conv1D(64, 3, activation='relu'),
+        layers.Flatten(),
+        layers.Dense(64, activation='relu'),
+        layers.Dense(64, activation='relu'),
+    ])
+
+    print(traj_head.summary())
+    x = tf.random.normal([2, 10, 4])
+    y = traj_head(x)
+    print(y.shape)
+
     net = RepresentationNetwork(8, 16, 64)
 
     out = net([
