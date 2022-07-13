@@ -109,7 +109,7 @@ class SimulationEnv(AbstractEnv):
         # light state for agent's current lane, with state and stop_point
         self.cur_light_state = {"state": "GO", "stop_point": np.zeros(2)}
         self.lane_light_states = None
-        self.agent_states = []
+        self.agent_hist_states = []
 
         self.dst = None
 
@@ -133,7 +133,7 @@ class SimulationEnv(AbstractEnv):
 
     def reset(self):
         self.done = False
-        self.frame_idx = 0
+        self.frame_idx = self.obs_len
         scenario = self.data_converter.get_a_scenario(idx=0)
         print("sceanrio id {}".format(scenario['scenario_id']))
 
@@ -142,13 +142,13 @@ class SimulationEnv(AbstractEnv):
         agent_track = scenario['tracks_to_predict'][0]
         self.scenario['agent_features'] = scenario['tracks'][agent_track]
 
-        agent_init_state = self.scenario['agent_features'][self.frame_idx]
-        self.agent_state = AgentState(agent_init_state[0], agent_init_state[1],
-                                      agent_init_state[2], agent_init_state[3],
-                                      agent_init_state[4], agent_init_state[5],
-                                      agent_init_state[6], agent_init_state[7],
-                                      agent_init_state[8], agent_init_state[9])
-        self.agent_states.append(self.agent_state)
+        # self.obs_len history steps + current step
+        for i in range(self.obs_len + 1):
+            state = self.scenario['agent_features'][i]
+            self.agent_hist_states.append(
+                AgentState(state[0], state[1], state[2], state[3], state[4],
+                           state[5], state[6], state[7], state[8], state[9]))
+        self.agent_state = self.agent_hist_states[-1]
 
         self.dst = Point(self.scenario['agent_features'][-1, 0],
                          self.scenario['agent_features'][-1, 1])
@@ -176,10 +176,12 @@ class SimulationEnv(AbstractEnv):
 
         observation = {}
         observation['agent_features'] = np.array(
-            [s.to_array() for s in self.agent_states[-self.obs_len:]])
-        observation['social_features'] = self.scenario['social_features'][
-            max(0, self.frame_idx - self.obs_len):self.frame_idx]
-        observation['map_features'] = self.scenario['map_features']
+            [s.to_array() for s in self.agent_hist_states[-self.obs_len:]])
+        observation['social_features'] = self.scenario[
+            'social_features'][:,
+                               max(0, self.frame_idx - self.obs_len +
+                                   1):self.frame_idx + 1]
+        observation['map_features'] = self.scenario['map_features']['lanes']
         observation['light_features'] = self.scenario['light_features']
 
         return observation
@@ -192,7 +194,7 @@ class SimulationEnv(AbstractEnv):
 
         # update agent
         self.agent_state = self.__apply_vehicle_dynamics(action)
-        self.agent_states.append(self.agent_state)
+        self.agent_hist_states.append(self.agent_state)
 
         # update social agents
         self.social_state = self.scenario['social_features'][:, self.frame_idx]
@@ -204,20 +206,22 @@ class SimulationEnv(AbstractEnv):
 
         self.cur_light_state = self.__find_cur_light_state()
 
-        new_observation = {}
-        new_observation['agent_features'] = np.array(
-            [s.to_array() for s in self.agent_states[-self.obs_len:]])
-        new_observation['social_features'] = self.scenario['social_features'][
-            max(0, self.frame_idx - self.obs_len):self.frame_idx]
-        new_observation['map_features'] = self.scenario['map_features']
-        new_observation['light_features'] = self.scenario['light_features']
+        observation = {}
+        observation['agent_features'] = np.array(
+            [s.to_array() for s in self.agent_hist_states[-self.obs_len:]])
+        observation['social_features'] = self.scenario[
+            'social_features'][:,
+                               max(0, self.frame_idx - self.obs_len +
+                                   1):self.frame_idx + 1]
+        observation['map_features'] = self.scenario['map_features']['lanes']
+        observation['light_features'] = self.scenario['light_features']
 
         reward = self.__get_reward()
 
         self.done = self.__dst_reached() or (self.frame_idx
                                              == self.max_frames - 1)
 
-        return new_observation, reward, self.done
+        return observation, reward, self.done
 
     def render(self):
         # TODO(alanxu): render lanes, road lines, road edges, agent/social
@@ -405,13 +409,27 @@ class SimulationEnv(AbstractEnv):
 
 if __name__ == "__main__":
     sim_env = SimulationEnv([
-        "/home/alanxu/Downloads/waymo_motion_data/"
-        "uncompressed_scenario_training_training.tfrecord-00491-of-01000"
+        "/home/alanquantum/Downloads/waymo_motion_data/"
+        "uncompressed_scenario_training_training.tfrecord-00000-of-01000"
     ])
 
+    obs = sim_env.reset()
+    print(obs.keys())
+    print(obs.get('agent_features').shape)
+    print(obs.get('social_features').shape)
+    print(len(obs.get('map_features')))
+    print(len(obs.get('light_features')))
+
+    print((obs.get('light_features')))
+
+    # print(obs)
+
     t0 = time.time()
-    for _ in range(111):
+    for _ in range(100):
         sim_env.reset()
         for i in range(90):
-            sim_env.step(np.array([1.0, 0]))
+            _, _, done = sim_env.step(np.random.normal(size=(2)))
+            if done:
+                print(i)
+                break
     print(time.time() - t0)

@@ -12,7 +12,7 @@ from env import SimulationEnv
 from trainer import Trainer, CPUActor
 from replay_buffer import ReplayBuffer
 from shared_storage import SharedStorage
-from log_play import LogPlayer
+from sim_player import SimPlayer
 
 
 class Config:
@@ -20,7 +20,7 @@ class Config:
     def __init__(self):
         self.seed = 0
 
-        self.num_workers = 1
+        self.num_workers = 2
         self.discount = 0.997
 
         # Training
@@ -51,6 +51,10 @@ class Config:
         self.replay_buffer_size = int(1e6)
         # Number of steps in the future to take into account for calculating the target value
         self.td_steps = 10
+
+        self.play_delay = False
+
+        self.ratio = False
 
 
 class RLAgent:
@@ -123,7 +127,7 @@ class RLAgent:
         #     self.config, self.replay_buffer_worker, self.shared_storage_worker)
 
         self.sim_workers = [
-            LogPlayer.options(num_cpus=1,
+            SimPlayer.options(num_cpus=1,
                               num_gpus=1).remote(self.config,
                                                  self.config.seed + seed)
             for seed in range(self.config.num_workers)
@@ -211,7 +215,7 @@ class RLAgent:
         self.shared_storage_worker = None
 
     def test(self, render=True, num_tests=1):
-        sim_worker = LogPlayer(self.config, np.random.randint(10000))
+        sim_worker = SimPlayer(self.config, np.random.randint(10000))
         results = []
 
         for i in range(num_tests):
