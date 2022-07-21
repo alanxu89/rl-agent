@@ -20,7 +20,7 @@ class Config:
     def __init__(self):
         self.seed = 0
 
-        self.num_workers = 2
+        self.num_workers = 1
         self.discount = 0.997
 
         # Training
@@ -91,7 +91,7 @@ class RLAgent:
             "value_loss": 0,
             "reward_loss": 0,
             "policy_loss": 0,
-            "num_played_games": 0,
+            "num_played_episodes": 0,
             "num_played_steps": 0,
             "num_reanalysed_games": 0,
             "terminate": False,
@@ -123,12 +123,15 @@ class RLAgent:
         self.replay_buffer_worker = ReplayBuffer.remote(
             self.config.replay_buffer_size)
 
-        # self.training_worker = Trainer.options(num_cpus=0, num_gpus=1).remote(
-        #     self.config, self.replay_buffer_worker, self.shared_storage_worker)
+        self.training_worker = Trainer.options(num_cpus=0, num_gpus=1).remote(
+            self.config, self.replay_buffer_worker, self.shared_storage_worker)
+
+        # launch training
+        self.training_worker.train.remote()
 
         self.sim_workers = [
             SimPlayer.options(num_cpus=1,
-                              num_gpus=1).remote(self.config,
+                              num_gpus=0).remote(self.config,
                                                  self.config.seed + seed)
             for seed in range(self.config.num_workers)
         ]
@@ -137,8 +140,6 @@ class RLAgent:
         for sim_worker in self.sim_workers:
             sim_worker.continuous_play.remote(self.shared_storage_worker,
                                               self.replay_buffer_worker)
-
-        # self.training_worker.train.remote()
 
         for i in range(100):
             time.sleep(1)

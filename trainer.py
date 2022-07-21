@@ -5,8 +5,6 @@ import ray
 import numpy as np
 import tensorflow as tf
 
-from keras import optimizers
-
 from models import RepresentationNetwork, ActorNetwork, CriticNetwork
 from replay_buffer import ReplayBuffer
 from shared_storage import SharedStorage
@@ -45,13 +43,13 @@ class Trainer:
         self.critic_target = CriticNetwork()
         self.actor_target = ActorNetwork()
 
-        self.lr_schedule = optimizers.schedules.ExponentialDecay(
+        self.lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
             self.config.lr_init,
             self.config.lr_decay_steps,
             self.config.lr_decay_rate,
             staircase=True)
 
-        self.optimizer = optimizers.Adam(self.lr_schedule)
+        self.optimizer = tf.keras.optimizers.Adam(self.lr_schedule)
 
         self.tau = 0.1
         self.step = 0
@@ -62,14 +60,19 @@ class Trainer:
     def train(self):
 
         # Wait for the replay buffer to be filled
-        while ray.get(self.shared_storage.get_info("num_played_games")) < 1:
+        while ray.get(
+                self.shared_storage.get_info.remote(
+                    "num_played_episodes")) < 10:
+            print("sleep 1")
             time.sleep(1)
 
         while self.step < self.config.training_steps and not ray.get(
-                self.shared_storage.get_info("terminate")):
+                self.shared_storage.get_info.remote("terminate")):
             print("training steps {} and terminate status {}".format(
-                self.step, ray.get(self.shared_storage.get_info("terminate"))))
-            batch = self.replay_buffer.get_batch()
+                self.step,
+                ray.get(self.shared_storage.get_info.remote("terminate"))))
+
+            batch = ray.get(self.replay_buffer.get_batch.remote())
             self.train_step(batch)
 
             if self.step % self.config.checkpoint_interval == 0:
@@ -89,29 +92,31 @@ class Trainer:
         https://spinningup.openai.com/en/latest/algorithms/td3.html#pseudocode
         https://zhuanlan.zhihu.com/p/357719456
         """
+        (observations, actions, next_observations, rewards,
+         dones) = replay_data
+
         actor_losses, critic_losses = [], []
 
         self.step += 1
         # Sample replay buffer
 
         # Select action according to policy and add clipped noise
-        noise = tf.clip_by_value(
-            tf.random.normal(tf.shape(replay_data.action)), -0.1, 0.1)
+        noise = tf.clip_by_value(tf.random.normal(tf.shape(actions)), -0.1,
+                                 0.1)
         next_actions = tf.clip_by_value(
-            self.actor_target(self.state_encoder(replay_data.next_state)) +
-            noise, -1, 1)
+            self.actor_target(self.state_encoder(next_observations)) + noise,
+            -1, 1)
 
         # Compute the next Q-values: min over all critics targets
         q1_target, q2_target = self.critic_target(
-            self.state_encoder(replay_data.next_state), next_actions)
+            self.state_encoder(next_observations), next_actions)
         next_q_values = tf.minimum(q1_target, q2_target)
-        target_q_values = replay_data.rewards + (
-            1 - replay_data.dones) * self.gamma * next_q_values
+        target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
 
         with tf.GradientTape() as critic_tape:
             # Get current Q-values estimates for each critic network
-            current_q_values = self.critic(
-                self.state_encoder(replay_data.state), replay_data.actions)
+            current_q_values = self.critic(self.state_encoder(observations),
+                                           actions)
             # Compute critic loss
             critic_loss = sum([
                 tf.reduce_mean(tf.square(current_q - target_q_values))
@@ -131,7 +136,7 @@ class Trainer:
         if self.step % self.policy_delay == 0:
             with tf.GradientTape() as actor_tape:
                 # Compute actor loss
-                encoded_state = self.state_encoder(replay_data.state)
+                encoded_state = self.state_encoder(observations)
                 q1, q2 = self.critic(encoded_state, self.actor(encoded_state))
                 actor_loss = -q1
                 actor_losses.append(actor_loss)
