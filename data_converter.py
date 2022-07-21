@@ -63,7 +63,6 @@ class WaymoDataConverter(DataConverter):
                     state.length, state.width, state.height, state.heading,
                     state.velocity_x, state.velocity_y, state.valid
                 ])
-            track_data = np.array(track_data)
             tracks.append(track_data)
         tracks = np.array(tracks)
 
@@ -137,12 +136,16 @@ class WaymoDataConverter(DataConverter):
 
 if __name__ == "__main__":
     waymo = WaymoDataConverter()
-    data_dir = "/home/alanxu/Downloads/waymo_motion_data"
-    fname = "uncompressed_scenario_training_training.tfrecord-00491-of-01000"
+    data_dir = "/home/alanquantum/Downloads/waymo_motion_data"
+    fname = "uncompressed_scenario_training_training.tfrecord-00001-of-01000"
     waymo.read(os.path.join(data_dir, fname))
     t0 = time.time()
-    for _ in range(10):
+    for _ in range(1):
         s = waymo.get_a_scenario(idx=0)
         print(s['scenario_id'])
     print(time.time() - t0)
+    print(s['tracks'].shape)
+    tracks = s['tracks']
+    # print(tracks[:, :, -1])
+    print(np.sum(tracks[:, :, -1]))
     time.sleep(5)

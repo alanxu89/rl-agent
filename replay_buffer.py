@@ -1,7 +1,7 @@
 import copy
 import psutil
 import warnings
-from typing import Any, Dict, Generator, List, Optional, Union
+from typing import Any, Dict, List, Tuple
 
 import ray
 import numpy as np
@@ -30,6 +30,8 @@ class ReplayBuffer:
         self.buffer_size = buffer_size
         self.action_dim = action_dim
 
+        self.full = False
+
         # Check that the replay buffer can fit into the memory
         if psutil is not None:
             mem_available = psutil.virtual_memory().available
@@ -39,8 +41,9 @@ class ReplayBuffer:
         # https://github.com/DLR-RM/stable-baselines3/pull/243#discussion_r531535702
         self.optimize_memory_usage = optimize_memory_usage
 
-        self.observations = {}
-        self.next_observations = {}
+        # list of list of ndarrays: [[feature1, feature2, ... featuren], ...]
+        self.observations = []
+        self.next_observations = []
 
         self.actions = np.zeros((self.buffer_size, self.action_dim))
         self.rewards = np.zeros((self.buffer_size), dtype=np.float32)
@@ -51,49 +54,44 @@ class ReplayBuffer:
         self.handle_timeout_termination = handle_timeout_termination
         self.timeouts = np.zeros((self.buffer_size), dtype=np.float32)
 
-        if psutil is not None:
-            obs_nbytes = 0
-            for _, obs in self.observations.items():
-                obs_nbytes += obs.nbytes
+        # if psutil is not None:
+        #     obs_nbytes = 0
+        #     for _, obs in self.observations.items():
+        #         obs_nbytes += obs.nbytes
 
-            total_memory_usage = obs_nbytes + self.actions.nbytes + self.rewards.nbytes + self.dones.nbytes
-            if self.next_observations is not None:
-                next_obs_nbytes = 0
-                for _, obs in self.observations.items():
-                    next_obs_nbytes += obs.nbytes
-                total_memory_usage += next_obs_nbytes
+        #     total_memory_usage = obs_nbytes + self.actions.nbytes + self.rewards.nbytes + self.dones.nbytes
+        #     if self.next_observations is not None:
+        #         next_obs_nbytes = 0
+        #         for _, obs in self.observations.items():
+        #             next_obs_nbytes += obs.nbytes
+        #         total_memory_usage += next_obs_nbytes
 
-            if total_memory_usage > mem_available:
-                # Convert to GB
-                total_memory_usage /= 1e9
-                mem_available /= 1e9
-                warnings.warn(
-                    "This system does not have apparently enough memory to store the complete "
-                    f"replay buffer {total_memory_usage:.2f}GB > {mem_available:.2f}GB"
-                )
+        #     if total_memory_usage > mem_available:
+        #         # Convert to GB
+        #         total_memory_usage /= 1e9
+        #         mem_available /= 1e9
+        #         warnings.warn(
+        #             "This system does not have apparently enough memory to store the complete "
+        #             f"replay buffer {total_memory_usage:.2f}GB > {mem_available:.2f}GB"
+        #         )
 
     def add(
         self,
-        obs: Dict[str, np.ndarray],
+        obs: List[np.ndarray],
         action: np.ndarray,
-        next_obs: Dict[str, np.ndarray],
+        next_obs: List[np.ndarray],
         reward: float,
         done: bool,
         info: Dict[str, Any],
     ) -> None:
         # Copy to avoid modification by reference
-        for key in self.observations.keys():
-            # Reshape needed when using multiple envs with discrete observations
-            # as numpy cannot broadcast (n_discrete,) to (n_discrete, 1)
-            self.observations[key][self.pos] = np.array(obs[key])
 
-        for key in self.next_observations.keys():
-            self.next_observations[key][self.pos] = np.array(
-                next_obs[key]).copy()
+        self.observations.append(obs.copy())
+        self.next_observations.append(next_obs.copy())
 
-        self.actions[self.pos] = np.array(action).copy()
-        self.rewards[self.pos] = np.array(reward).copy()
-        self.dones[self.pos] = np.array(done).copy()
+        self.actions[self.pos] = action
+        self.rewards[self.pos] = reward
+        self.dones[self.pos] = done
 
         if self.handle_timeout_termination:
             self.timeouts[self.pos] = info.get("TimeLimit.truncated", False)
@@ -124,29 +122,42 @@ class ReplayBuffer:
             batch_inds = np.random.randint(0, self.pos, size=batch_size)
         return self._get_samples(batch_inds)
 
-    def _get_samples(self, batch_inds: np.ndarray) -> Dict:
-        obs_ = {
-            key: obs[batch_inds, :]
-            for key, obs in self.observations.items()
-        }
-        next_obs_ = {
-            key: obs[batch_inds, :]
-            for key, obs in self.next_observations.items()
-        }
+    def _get_samples(self, batch_inds: np.ndarray) -> Tuple:
+        observations = [self.observations[idx] for idx in batch_inds]
+        observations = self._batch_features(observations)
+        next_observations = [self.next_observations[idx] for idx in batch_inds]
+        next_observations = self._batch_features(next_observations)
 
-        # Convert to torch tensor
-        observations = {key: obs for key, obs in obs_.items()}
-        next_observations = {key: obs for key, obs in next_obs_.items()}
-
-        return Dict(
-            observations=observations,
-            actions=self.actions[batch_inds],
-            next_observations=next_observations,
+        return (
+            observations,
+            self.actions[batch_inds],
+            next_observations,
             # Only use dones that are not due to timeouts
             # deactivated by default (timeouts is initialized as an array of False)
-            rewards=self.rewards[batch_inds],
-            dones=self.dones[batch_inds] * (1 - self.timeouts[batch_inds]),
+            self.rewards[batch_inds],
+            self.dones[batch_inds] * (1 - self.timeouts[batch_inds]),
         )
+
+    def _batch_features(self, features: List[List[np.ndarray]]):
+        """ batch feature arrays
+        
+        Args: 
+            list of features: [[feature1, feature2, ... featuren], ...]
+        Returns:
+            batched features:
+                [batch_feature1, batch_feature2, ...]
+        """
+        batch_size = len(features)
+        num_features = len(features[0])
+        # print(batch_size, num_features)
+        batched_features = []
+        for j in range(num_features):
+            batched_feature = []
+            for i in range(batch_size):
+                batched_feature.append(features[i][j])
+            batched_features.append(np.stack(batched_feature))
+
+        return batched_features
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import time
 import math
+import os
 
 import ray
 import numpy as np
@@ -42,11 +43,14 @@ class SimPlayer:
                 ray.get(shared_storage.get_info.remote("actor_weights")))
 
             if not test_mode:
-                replay_data = self.play(False)
-                for rd in replay_data:
-                    replay_buffer.add.remote(rd.observation, rd.action,
-                                             rd.next_observation, rd.reward,
-                                             rd.done, {})
+                episode_data = self.play(False)
+                for frame_data in episode_data:
+                    (observation, action, next_observation, reward,
+                     done) = frame_data
+                    replay_buffer.add.remote(list(observation), action,
+                                             list(next_observation), reward,
+                                             done, {})
+                shared_storage.increment_episodes.remote()
 
                 if self.config.play_delay:
                     time.sleep(self.config.play_delay)
@@ -64,60 +68,55 @@ class SimPlayer:
                             shared_storage.get_info.remote("terminate")):
                         time.sleep(0.5)
             else:
-                replay_data = self.play(False)
+                episode_data = self.play(False)
                 shared_storage.set_info.remote({
                     "episode_length":
-                    len(len(replay_data)) - 1,
+                    len(len(episode_data)) - 1,
                     "total_reward":
-                    sum([rd.reward for rd in replay_data]),
+                    sum([rd.reward for rd in episode_data]),
                 })
 
         self.close_game()
 
     def play(self, render: bool = False):
         observation = self.env.reset()
-        obs_array = convert_observation_to_arrays(observation)
+        obs_arrays = convert_observation(observation)
+        obs_arrays_expanded = [
+            np.expand_dims(arr, axis=0) for arr in obs_arrays
+        ]
         done = False
 
-        replay_data_list = []
+        episode_data = []
         if render:
             self.env.render()
 
         while not done:
             # inference
-            encoded_state = self.state_enc(obs_array)
+            t0 = time.perf_counter()
+            encoded_state = self.state_enc(obs_arrays_expanded)
+            t1 = time.perf_counter()
             action = self.actor(encoded_state)
-            # print(action)
+            # print(t1 - t0, time.perf_counter() - t1)
+
             action = tf.squeeze(action) + tf.random.normal([2])
-            # print(action)
 
             # simulation
             next_observation, reward, done = self.env.step(action)
-            next_obs_array = convert_observation_to_arrays(next_observation)
+            next_obs_arrays = convert_observation(next_observation)
 
             if render:
                 self.env.render()
 
-            replay_data_list.append(
-                ReplayData(obs_array, action, reward, next_obs_array, done))
+            episode_data.append(
+                (obs_arrays, action, next_obs_arrays, reward, done))
 
-        return replay_data_list
+        return episode_data
 
     def close_game(self):
         self.env.close()
 
 
-class ReplayData:
-
-    def __init__(self, observation, action, reward, next_observation, done):
-        self.observation = observation
-        self.action = action
-        self.reward = reward
-        self.next_observation = next_observation
-        self.done = done
-
-
-def convert_observation_to_arrays(observation):
+def convert_observation(observation):
     """
     obs: {
             "agent_features": [obs_len, features],
@@ -139,22 +138,28 @@ def convert_observation_to_arrays(observation):
     social_feature_arr = coordinate_transform(social_feature_arr, shift, angle)
     map_feature_arr = coordinate_transform(map_feature_arr, shift, angle)
 
-    return np.expand_dims(agent_feature_arr, axis=0), np.expand_dims(
-        social_feature_arr, axis=0), np.expand_dims(map_feature_arr, axis=0)
+    return (
+        agent_feature_arr.astype(np.float32),
+        social_feature_arr.astype(np.float32),
+        map_feature_arr.astype(np.float32),
+    )
 
 
-def convert_agent_feature_to_array(agent_feature):
-    return agent_feature.astype(np.float32)
+def convert_agent_feature_to_array(agent_feature, features_to_keep=9):
+    return agent_feature[:, :features_to_keep]
 
 
-def convert_social_feature_to_array(social_feature, max_social_agents=32):
+def convert_social_feature_to_array(social_feature,
+                                    max_social_agents=96,
+                                    features_to_keep=9):
+    social_feature = social_feature[:, :, :features_to_keep]
     # pad data
     num_agents = social_feature.shape[0]
     if num_agents >= max_social_agents:
-        return social_feature[:max_social_agents].astype(np.float32)
+        return social_feature[:max_social_agents]
     else:
-        return np.pad(social_feature, ((0, max_social_agents - num_agents),
-                                       (0, 0), (0, 0))).astype(np.float32)
+        return np.pad(social_feature,
+                      ((0, max_social_agents - num_agents), (0, 0), (0, 0)))
 
 
 def convert_map_feature_to_array(map_feature, max_lanes=64, max_lane_seq=256):
@@ -174,7 +179,7 @@ def convert_map_feature_to_array(map_feature, max_lanes=64, max_lane_seq=256):
         if len(new_map_feature) >= max_lanes:
             break
 
-    return np.array(new_map_feature).astype(np.float32)
+    return np.array(new_map_feature)
 
 
 def coordinate_transform(coords, shift, angle):
