@@ -34,5 +34,8 @@ class SharedStorage:
         else:
             raise TypeError
 
+    def increment_episodes(self, new_episodes=1):
+        self.current_checkpoint['num_played_episodes'] += new_episodes
+
     def get_batch(self):
         return {}
