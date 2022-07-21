@@ -12,17 +12,21 @@ class RepresentationNetwork(keras.Model):
         self,
         max_social_agents=32,
         obs_len=10,
+        agent_feature_dim=9,
         max_lanes=64,
         max_lane_seq=256,
+        lane_feature_dim=2,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
-        self.obs_len = obs_len
         self.max_social_agents = max_social_agents
+        self.obs_len = obs_len
+        self.agent_feature_dim = agent_feature_dim
         self.max_lanes = max_lanes
         self.max_lane_seq = max_lane_seq
+        self.lane_feature_dim = lane_feature_dim
 
         self.traj_head = keras.Sequential([
             layers.Conv1D(32, 3, activation='relu'),
@@ -50,9 +54,9 @@ class RepresentationNetwork(keras.Model):
 
     def __build_model(self):
         self.build([
-            (2, self.obs_len, 10),
-            (2, self.max_social_agents, self.obs_len, 10),
-            (2, self.max_lanes, self.max_lane_seq, 2),
+            (2, self.obs_len, self.agent_feature_dim),
+            (2, self.max_social_agents, self.obs_len, self.agent_feature_dim),
+            (2, self.max_lanes, self.max_lane_seq, self.lane_feature_dim),
         ])
 
     # @tf.function
@@ -161,37 +165,26 @@ class ActorNetwork(keras.Model):
 
 
 if __name__ == "__main__":
-    traj_head = keras.Sequential([
-        layers.Conv1D(32, 3, activation='relu', input_shape=(10, 4)),
-        # layers.AveragePooling1D(),
-        layers.Conv1D(64, 3, activation='relu'),
-        # layers.AveragePooling1D(),
-        layers.Conv1D(64, 3, activation='relu'),
-        layers.Flatten(),
-        layers.Dense(64, activation='relu'),
-        layers.Dense(64, activation='relu'),
-    ])
+    with tf.device('/CPU:0'):
+        net = RepresentationNetwork(agent_feature_dim=2)
+        print(net.summary())
+    bs = 1
 
-    print(traj_head.summary())
-    x = tf.random.normal([2, 10, 4])
-    y = traj_head(x)
-    print(y.shape)
-
-    net = RepresentationNetwork(8, 16, 64)
-
-    out = net([
-        tf.random.normal([64, 6]),
-        tf.random.normal([64, 8, 6]),
-        tf.random.normal([64, 16, 64, 4])
-    ])
+    # out = net([
+    #     tf.random.normal([bs, 10, 2]),
+    #     tf.random.normal([bs, 32, 10, 2]),
+    #     tf.random.normal([bs, 64, 256, 2])
+    # ])
 
     t0 = time.time()
     for _ in range(1000):
-        out = net([
-            tf.random.normal([64, 6]),
-            tf.random.normal([64, 8, 6]),
-            tf.random.normal([64, 16, 64, 4])
-        ])
+        with tf.device('/CPU:0'):
+            x = [
+                tf.random.normal([bs, 10, 2]),
+                tf.random.normal([bs, 32, 10, 2]),
+                tf.random.normal([bs, 64, 256, 2]),
+            ]
+        out = net(x)
         # print(out.shape)
 
     print(time.time() - t0)
