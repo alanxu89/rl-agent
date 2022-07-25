@@ -98,6 +98,7 @@ class Trainer:
         actor_losses, critic_losses = [], []
 
         self.step += 1
+        print("train step {}".format(self.step))
         # Sample replay buffer
 
         # Select action according to policy and add clipped noise
@@ -109,20 +110,21 @@ class Trainer:
 
         # Compute the next Q-values: min over all critics targets
         q1_target, q2_target = self.critic_target(
-            self.state_encoder(next_observations), next_actions)
+            [self.state_encoder(next_observations), next_actions])
         next_q_values = tf.minimum(q1_target, q2_target)
-        target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
+        target_q_values = rewards + (
+            1 - dones) * self.config.discount * next_q_values
 
         with tf.GradientTape() as critic_tape:
             # Get current Q-values estimates for each critic network
-            current_q_values = self.critic(self.state_encoder(observations),
-                                           actions)
+            current_q_values = self.critic(
+                [self.state_encoder(observations), actions])
             # Compute critic loss
             critic_loss = sum([
                 tf.reduce_mean(tf.square(current_q - target_q_values))
                 for current_q in current_q_values
             ])
-            critic_losses.append(critic_loss.item())
+            # critic_losses.append(critic_loss.item())
 
         grads = critic_tape.gradient(
             critic_loss, self.critic.trainable_weights +
@@ -133,11 +135,12 @@ class Trainer:
                 self.state_encoder.trainable_weights))
 
         # Delayed policy updates
-        if self.step % self.policy_delay == 0:
+        if self.step % self.config.policy_delay == 0:
             with tf.GradientTape() as actor_tape:
                 # Compute actor loss
                 encoded_state = self.state_encoder(observations)
-                q1, q2 = self.critic(encoded_state, self.actor(encoded_state))
+                q1, q2 = self.critic(
+                    [encoded_state, self.actor(encoded_state)])
                 actor_loss = -q1
                 actor_losses.append(actor_loss)
 
