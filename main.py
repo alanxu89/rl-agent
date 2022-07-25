@@ -20,7 +20,7 @@ class Config:
     def __init__(self):
         self.seed = 0
 
-        self.num_workers = 1
+        self.num_workers = 3
         self.discount = 0.997
 
         # Training
@@ -48,13 +48,15 @@ class Config:
         self.lr_decay_steps = 10000
 
         # Replay Buffer
-        self.replay_buffer_size = int(1e6)
+        self.replay_buffer_size = int(3e4)
         # Number of steps in the future to take into account for calculating the target value
         self.td_steps = 10
 
         self.play_delay = False
 
         self.ratio = False
+
+        self.policy_delay = 10
 
 
 class RLAgent:
@@ -141,7 +143,7 @@ class RLAgent:
             sim_worker.continuous_play.remote(self.shared_storage_worker,
                                               self.replay_buffer_worker)
 
-        for i in range(100):
+        for i in range(3600 * 8):
             time.sleep(1)
         # if log_in_tensorboard:
         #     self.logging_loop()

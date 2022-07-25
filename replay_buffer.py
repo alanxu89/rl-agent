@@ -101,6 +101,9 @@ class ReplayBuffer:
             self.full = True
             self.pos = 0
 
+        if self.pos % 1000 == 0:
+            print("replay buffer data size {}".format(self.pos))
+
     def get_batch(self, batch_size: int = 128):
         """
         Sample elements from the replay buffer.
