@@ -15,7 +15,7 @@ from env import SimulationEnv
 @ray.remote
 class SimPlayer:
 
-    def __init__(self, config, seed):
+    def __init__(self, config, seed, initial_checkpoint):
         self.config = config
         self.data_files = [
             "/home/alanquantum/Downloads/waymo_motion_data/"
@@ -28,6 +28,9 @@ class SimPlayer:
 
         self.state_enc = RepresentationNetwork()
         self.actor = ActorNetwork()
+
+        self.state_enc.set_weights(initial_checkpoint["state_encoder_weights"])
+        self.actor.set_weights(initial_checkpoint["actor_weights"])
 
     def continuous_play(self,
                         shared_storage: SharedStorage,
@@ -71,9 +74,9 @@ class SimPlayer:
                 episode_data = self.play(False)
                 shared_storage.set_info.remote({
                     "episode_length":
-                    len(len(episode_data)) - 1,
+                    len(episode_data) - 1,
                     "total_reward":
-                    sum([rd.reward for rd in episode_data]),
+                    sum([frame_data[3] for frame_data in episode_data]),
                 })
 
         self.close_game()

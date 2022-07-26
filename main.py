@@ -1,3 +1,4 @@
+from http.cookies import SimpleCookie
 import os
 import datetime
 import time
@@ -20,7 +21,7 @@ class Config:
     def __init__(self):
         self.seed = 0
 
-        self.num_workers = 3
+        self.num_workers = 2
         self.discount = 0.997
 
         # Training
@@ -48,7 +49,7 @@ class Config:
         self.lr_decay_steps = 10000
 
         # Replay Buffer
-        self.replay_buffer_size = int(3e4)
+        self.replay_buffer_size = int(1e4)
         # Number of steps in the future to take into account for calculating the target value
         self.td_steps = 10
 
@@ -134,7 +135,8 @@ class RLAgent:
         self.sim_workers = [
             SimPlayer.options(num_cpus=1,
                               num_gpus=0).remote(self.config,
-                                                 self.config.seed + seed)
+                                                 self.config.seed + seed,
+                                                 self.checkpoint)
             for seed in range(self.config.num_workers)
         ]
 
@@ -143,12 +145,21 @@ class RLAgent:
             sim_worker.continuous_play.remote(self.shared_storage_worker,
                                               self.replay_buffer_worker)
 
-        for i in range(3600 * 8):
-            time.sleep(1)
-        # if log_in_tensorboard:
-        #     self.logging_loop()
+        if log_in_tensorboard:
+            self.logging_loop()
 
     def logging_loop(self):
+        """
+        Keep track of the training performance.
+        """
+        # Launch the test worker to get performance metrics
+        self.test_worker = SimPlayer.options(num_cpus=1, num_gpus=0).remote(
+            self.config,
+            self.config.seed,
+            self.checkpoint,
+        )
+        self.test_worker.continuous_play.remote(self.shared_storage_worker,
+                                                None, True)
 
         hyper_params_table = [
             f"| {key} | {value} |"
@@ -168,8 +179,6 @@ class RLAgent:
 
         keys = [
             "total_reward",
-            "muzero_reward",
-            "opponent_reward",
             "episode_length",
             "mean_value",
             "training_step",
@@ -178,19 +187,21 @@ class RLAgent:
             "value_loss",
             "reward_loss",
             "policy_loss",
-            "num_played_games",
+            "num_played_episodes",
             "num_played_steps",
             "num_reanalysed_games",
         ]
-        info = self.shared_storage_worker.get_info.remote(keys)
+        info = ray.get(self.shared_storage_worker.get_info.remote(keys))
         try:
             while info["training_step"] < self.config.training_steps:
-                info = self.shared_storage_worker.get_info.remote(keys)
+                info = ray.get(
+                    self.shared_storage_worker.get_info.remote(keys))
                 # details to be implemented
                 with tf.device('/CPU'):
                     with writer.as_default():
-                        tf.summary.scalar("3.Loss/Reward_loss",
-                                          info["reward_loss"], counter)
+                        print(info['total_reward'])
+                        tf.summary.scalar("Total reward", info["total_reward"],
+                                          counter)
                 counter += 1
                 time.sleep(0.5)
         except KeyboardInterrupt:
@@ -200,7 +211,8 @@ class RLAgent:
             pickle.dump(
                 {
                     "buffer": self.replay_buffer,
-                    "num_played_games": self.checkpoint["num_played_games"],
+                    "num_played_episodes":
+                    self.checkpoint["num_played_episodes"],
                     "num_played_steps": self.checkpoint["num_played_steps"],
                 },
                 open(
@@ -245,10 +257,8 @@ class RLAgent:
                 self.replay_buffer = replay_buffer_infos["replay_buffer"]
                 self.checkpoint["num_played_steps"] = replay_buffer_infos[
                     "num_played_steps"]
-                self.checkpoint["num_played_games"] = replay_buffer_infos[
-                    "num_played_games"]
-                self.checkpoint["num_reanalysed_games"] = replay_buffer_infos[
-                    "num_reanalysed_games"]
+                self.checkpoint["num_played_episodes"] = replay_buffer_infos[
+                    "num_played_episodes"]
 
                 print(
                     f"\nInitializing replay buffer with {replay_buffer_path}")
@@ -258,8 +268,7 @@ class RLAgent:
                 )
                 self.checkpoint["training_step"] = 0
                 self.checkpoint["num_played_steps"] = 0
-                self.checkpoint["num_played_games"] = 0
-                self.checkpoint["num_reanalysed_games"] = 0
+                self.checkpoint["num_played_episodes"] = 0
 
 
 if __name__ == "__main__":
